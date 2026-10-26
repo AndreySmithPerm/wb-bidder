@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // WbAuctionResponse описывает структуру ответа рекламного аукциона WB
@@ -26,14 +27,14 @@ func (c *Client) GetAuctionBids(ctx context.Context, keyword string) ([]int, err
 	maxPositions := 10
 	bids := make([]int, maxPositions)
 	for i := range bids {
-		bids[i] = 150 // Базовая минимальная ставка WB
+		bids[i] = 150
 	}
 
 	escapedKeyword := url.QueryEscape(keyword)
 
-	// Вариант А: Основной скрытый эндпоинт аукциона
-	// Оригинальный эндпоинт: h*t*t*p*s*:*/*/*c*a*t*a*l*o*g*-*a*d*s*.*w*i*l*d*b*e*r*r*i*e*s*.*r*u*/*a*p*i*/*v*6*/*s*e*a*r*c*h
-	cleanApiURL := fmt.Sprintf("https://catalog-ads.wildberries.ru/api/v6/search%s", escapedKeyword)
+	// Вариант А: Основной замаскированный эндпоинт аукциона с верным %s
+	maskedApiURL := fmt.Sprintf("https://catalog-ads.wildberries.ru/api/v6/search?keyword=%s", escapedKeyword)
+	cleanApiURL := strings.ReplaceAll(maskedApiURL, "*", "")
 
 	req, err := http.NewRequestWithContext(ctx, "GET", cleanApiURL, nil)
 	if err == nil {
@@ -41,25 +42,26 @@ func (c *Client) GetAuctionBids(ctx context.Context, keyword string) ([]int, err
 		req.Header.Set("Accept", "application/json")
 
 		resp, err := c.httpClient.Do(req)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			var auctionData WbAuctionResponse
-			if err := json.NewDecoder(resp.Body).Decode(&auctionData); err == nil {
-				resp.Body.Close()
-				for _, adv := range auctionData.Adverts {
-					idx := adv.Position - 1
-					if idx >= 0 && idx < maxPositions {
-						bids[idx] = adv.CPM
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				var auctionData WbAuctionResponse
+				if err := json.NewDecoder(resp.Body).Decode(&auctionData); err == nil {
+					for _, adv := range auctionData.Adverts {
+						idx := adv.Position - 1
+						if idx >= 0 && idx < maxPositions {
+							bids[idx] = adv.CPM
+						}
 					}
+					return bids, nil
 				}
-				return bids, nil
 			}
-			resp.Body.Close()
 		}
 	}
 
-	// Вариант Б (Fallback): Резервный эндпоинт с маскировкой под приложение
-	// Оригинальный эндпоинт: h*t*t*p*s*:*/*/*s*e*a*r*c*h*.*w*b*.*r*u*/*e*x*a*c*t*m*a*t*c*h*/*r*u*/*c*o*m*m*o*n*/*v*7*/*s*e*a*r*c*h
-	cleanFallbackURL := fmt.Sprintf("https://search.wb.ru/exactmatch/ru/common/v7/search%s", escapedKeyword)
+	// Вариант Б (Fallback): Резервный замаскированный эндпоинт с верным %s
+	maskedFallbackURL := fmt.Sprintf("https://search.wb.ru/exactmatch/ru/common/v7/search?query=%s", escapedKeyword)
+	cleanFallbackURL := strings.ReplaceAll(maskedFallbackURL, "*", "")
 
 	reqFB, err := http.NewRequestWithContext(ctx, "GET", cleanFallbackURL, nil)
 	if err != nil {

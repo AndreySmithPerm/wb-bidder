@@ -22,41 +22,61 @@ func NewBidderEngine(client WBClient) *BidderEngine {
 func (e *BidderEngine) CalculateAndApplyARC(ctx context.Context, campaign *model.Campaign, competitorsBids []int) error {
 	strat := campaign.Strategy
 
-	// В АРК мы ищем максимальную ставку среди конкурентов в выбранном диапазоне мест,
-	// чтобы гарантированно их перебить, либо берем ставку на целевом месте.
-	targetIdx := strat.TargetPlace - 1
-	if targetIdx >= len(competitorsBids) {
-		targetIdx = len(competitorsBids) - 1
+	// 1. ЗАЩИТА ОТ ПАНИКИ: если аукцион пуст, ставим минимальную ставку селлера
+	if len(competitorsBids) == 0 {
+		log.Printf("[АРК] Кампания %d: Аукцион пуст для фразы '%s'. Выставляем MinBid (%d руб.).",
+			campaign.ID, strat.Keyword, strat.MinBid)
+		return e.applyNewBid(ctx, campaign, strat.MinBid)
 	}
 
-	// Смотрим ставку конкурента на целевом месте
-	competitorBid := competitorsBids[targetIdx]
+	// 2. Корректируем целевое место под реальный размер аукциона
+	maxAvailablePlace := strat.TargetPlace
+	if maxAvailablePlace > len(competitorsBids) {
+		maxAvailablePlace = len(competitorsBids)
+	}
 
-	// Шаг ставки в АРК обычно составляет 1–5 рублей. Сделаем шаг в 1 рубль для экономии.
-	calculatedBid := competitorBid + 1
+	// 3. ПРАВИЛЬНЫЙ АЛГОРИТМ АРК:
+	// Ищем максимальную ставку среди конкурентов от 1-го места до нашего целевого.
+	// Это гарантирует, что мы перебьем их силу бустинга в этом диапазоне.
+	maxCompetitorBid := 0
+	for i := 0; i < maxAvailablePlace; i++ {
+		if competitorsBids[i] > maxCompetitorBid {
+			maxCompetitorBid = competitorsBids[i]
+		}
+	}
 
-	// Ограничиваем ставку рамками бюджета селлера
+	// Шаг ставки в АРК составляет 1 рубль.
+	calculatedBid := maxCompetitorBid + 1
+
+	// 4. Ограничиваем ставку рамками бюджета селлера
 	if calculatedBid > strat.MaxBid {
-		log.Printf("[АРК] Кампания %d: Расчетный CPM %d выше лимита %d. Занижаем до MaxBid.", campaign.ID, calculatedBid, strat.MaxBid)
+		log.Printf("[АРК] Кампания %d: Расчетный CPM %d выше лимита %d. Занижаем до MaxBid.",
+			campaign.ID, calculatedBid, strat.MaxBid)
 		calculatedBid = strat.MaxBid
 	}
+
 	if calculatedBid < strat.MinBid {
 		calculatedBid = strat.MinBid
 	}
 
-	// Защита от лишних запросов к API WB
+	// 5. Защита от лишних запросов к API WB (пропускаем, если ставка не изменилась)
 	if calculatedBid == campaign.CurrentBid {
 		log.Printf("[АРК] Кампания %d: Текущая ставка %d руб. оптимальна.", campaign.ID, campaign.CurrentBid)
 		return nil
 	}
 
-	// Вызываем новый АРК метод API
-	err := e.wbClient.UpdateAutoCPM(ctx, campaign.WbToken, campaign.ID, calculatedBid)
+	// 6. Отправка и применение ставки
+	return e.applyNewBid(ctx, campaign, calculatedBid)
+}
+
+// Вспомогательный метод для отправки запроса в WB и мутации структуры
+func (e *BidderEngine) applyNewBid(ctx context.Context, campaign *model.Campaign, newBid int) error {
+	err := e.wbClient.UpdateAutoCPM(ctx, campaign.WbToken, campaign.ID, newBid)
 	if err != nil {
 		return err
 	}
 
-	campaign.CurrentBid = calculatedBid
-	log.Printf("[АРК] Кампания %d: Успешно обновлен бустинг, новый CPM: %d руб.", campaign.ID, calculatedBid)
+	campaign.CurrentBid = newBid
+	log.Printf("[АРК] Кампания %d: Успешно обновлен бустинг, новый CPM: %d руб.", campaign.ID, newBid)
 	return nil
 }

@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"wb-bidder/internal/config"
@@ -21,16 +24,17 @@ import (
 func main() {
 	log.Println("Запуск коммерческого АРК-биддера Wildberries...")
 
-	// 1. Загружаем конфигурацию (.env)
+	// 1. Обработка системных сигналов для Graceful Shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Загружаем конфигурацию (.env)
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Ошибка загрузки конфигурации: %v", err)
 	}
 
 	cleanDbURL := strings.ReplaceAll(cfg.DbURL, "*", "")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// 2. Инициализируем пул соединений с PostgreSQL
 	dbPool, err := pgxpool.New(ctx, cleanDbURL)
@@ -39,7 +43,6 @@ func main() {
 	}
 	defer dbPool.Close()
 
-	// Проверяем связь с базой данных
 	if err := dbPool.Ping(ctx); err != nil {
 		log.Fatalf("База данных не отвечает на пинг: %v", err)
 	}
@@ -62,34 +65,38 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for camp := range campaignChan {
-				log.Printf("[Воркер %d] Кампания %d: проверка ключевой фразы '%s'", workerID, camp.ID, camp.Strategy.Keyword)
+				localCamp := camp
+
+				log.Printf("[Воркер %d] Кампания %d: проверка ключевой фразы '%s'", workerID, localCamp.ID, localCamp.Strategy.Keyword)
+
+				workerCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 
 				// Шаг А: Парсим реальный рекламный аукцион
-				realBids, err := wbCli.GetAuctionBids(ctx, camp.Strategy.Keyword)
+				realBids, err := wbCli.GetAuctionBids(workerCtx, localCamp.Strategy.Keyword)
 				if err != nil {
-					log.Printf("[Воркер %d] Ошибка парсинга аукциона для %d: %v", workerID, camp.ID, err)
-					_ = logRepo.SaveLog(ctx, camp.ID, camp.CurrentBid, camp.CurrentBid, []int{}, "Ошибка парсинга аукциона")
+					log.Printf("[Воркер %d] Ошибка парсинга аукциона для %d: %v", workerID, localCamp.ID, err)
+					_ = logRepo.SaveLog(ctx, localCamp.ID, localCamp.CurrentBid, localCamp.CurrentBid, []int{}, "Ошибка парсинга аукциона")
+					cancel()
 					continue
 				}
 
-				oldBid := camp.CurrentBid
+				oldBid := localCamp.CurrentBid
 
 				// Шаг Б: Рассчитываем и отправляем новую ставку АРК на WB
-				err = engine.CalculateAndApplyARC(ctx, &camp, realBids)
+				err = engine.CalculateAndApplyARC(workerCtx, &localCamp, realBids)
 
-				// Определяем статус-сообщение для истории логов
 				statusMsg := "Ставка оптимальна"
 				if err != nil {
 					statusMsg = "Ошибка API WB: " + err.Error()
-					log.Printf("[Воркер %d] Ошибка применения ставки для %d: %v", workerID, camp.ID, err)
-				} else if oldBid != camp.CurrentBid {
+					log.Printf("[Воркер %d] Ошибка применения ставки для %d: %v", workerID, localCamp.ID, err)
+				} else if oldBid != localCamp.CurrentBid {
 					statusMsg = "Ставка успешно изменена"
-					// Обновляем CPM в таблице campaigns
-					_ = campRepo.UpdateCampaignBid(ctx, camp.ID, camp.CurrentBid)
+					_ = campRepo.UpdateCampaignBid(ctx, localCamp.ID, localCamp.CurrentBid)
 				}
 
-				// Шаг В: Сохраняем результат в историю логов (для графиков в личном кабинете)
-				_ = logRepo.SaveLog(ctx, camp.ID, oldBid, camp.CurrentBid, realBids, statusMsg)
+				// Шаг В: Сохраняем результат в историю логов
+				_ = logRepo.SaveLog(ctx, localCamp.ID, oldBid, localCamp.CurrentBid, realBids, statusMsg)
+				cancel()
 			}
 		}(w)
 	}
@@ -100,33 +107,22 @@ func main() {
 	})
 
 	apiHandler := apiHttp.NewHandler(dbPool)
-
-	// Раздача статичных HTML/JS файлов фронтенда из папки web
 	app.Static("/", "./web")
 
-	// Публичные роуты (доступны всем)
-	app.Get("/api/public/price", apiHandler.GetPublicPrice) // роут цены
+	app.Get("/api/public/price", apiHandler.GetPublicPrice)
 	app.Get("/api/status", apiHandler.GetStatus)
 	app.Post("/api/auth/register", apiHandler.Register)
 	app.Post("/api/auth/login", apiHandler.Login)
-	app.Post("/api/payments/webhook", apiHandler.HandlePaymentWebhook) // Роут для приема денег
-
-	// Защищенный роут админки (сначала проверяем токен, потом проверяем роль админа)
+	app.Post("/api/payments/webhook", apiHandler.HandlePaymentWebhook)
 	app.Get("/api/admin/stats", apiHandler.AuthMiddleware, apiHandler.AdminMiddleware, apiHandler.GetAdminStats)
-
-	// Защищенный роут для селлеров (создание кампаний под защитой JWT)
 	app.Post("/api/campaigns", apiHandler.AuthMiddleware, apiHandler.AddCampaign)
-
-	// ВСТАВЛЯЕМ СЮДА: Роут истории логов конкретной кампании
 	app.Get("/api/campaigns/:id/logs", apiHandler.AuthMiddleware, apiHandler.GetCampaignLogs)
-
-	// Защищенный роут для получения данных профиля селлера
 	app.Get("/api/user/profile", apiHandler.AuthMiddleware, apiHandler.GetUserProfile)
 
 	go func() {
 		log.Println("Запуск Web-API сервера на порту :8080")
-		if err := app.Listen(":8080"); err != nil {
-			log.Printf("Предупреждение при остановке веб-сервера: %v", err)
+		if err := app.Listen(":8080"); err != nil && err != context.Canceled {
+			log.Printf("Уведомление веб-сервера: %v", err)
 		}
 	}()
 	// --- КОНЕЦ БЛОКА FIBER ---
@@ -135,11 +131,13 @@ func main() {
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 
-	// Запускаем первый цикл сканирования базы сразу при старте
-	activeCampaigns, err := campRepo.GetActiveCampaigns(ctx)
-	if err == nil {
+	if activeCampaigns, err := campRepo.GetActiveCampaigns(ctx); err == nil {
 		for _, c := range activeCampaigns {
-			campaignChan <- c
+			select {
+			case campaignChan <- c:
+			default:
+				log.Println("[Предупреждение] Очередь задач переполнена при старте")
+			}
 		}
 	}
 
@@ -153,11 +151,20 @@ func main() {
 				continue
 			}
 
-			log.Printf("Найдено %d active кампаний для отправки в пул воркеров.", len(activeCampaigns))
+			log.Printf("Найдено %d активных кампаний.", len(activeCampaigns))
 			for _, c := range activeCampaigns {
-				campaignChan <- c
+				select {
+				case campaignChan <- c:
+				default:
+					log.Printf("[Внимание] Задача для кампании %d пропущена, очередь переполнена!", c.ID)
+				}
 			}
+
 		case <-ctx.Done():
+			log.Println("Получен сигнал остановки. Инициируется Graceful Shutdown...")
+			if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
+				log.Printf("Ошибка при принудительной остановке Fiber: %v", err)
+			}
 			close(campaignChan)
 			wg.Wait()
 			log.Println("Сервис биддинга полностью остановлен.")

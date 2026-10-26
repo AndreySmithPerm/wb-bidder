@@ -17,11 +17,22 @@ func NewCampaignRepository(pool *pgxpool.Pool) *CampaignRepository {
 }
 
 // GetActiveCampaigns достает из Postgres все кампании, для которых включен биддинг
-// и у чьих владельцев (пользователей) на текущий момент оплачена подписка
+// и у чьих владельцев на текущий момент оплачена подписка.
 func (r *CampaignRepository) GetActiveCampaigns(ctx context.Context) ([]model.Campaign, error) {
-	// Обновленный SQL-запрос с JOIN и жестким коммерческим фильтром подписки
+	// Использование COALESCE защищает приложение от ошибок Scan, если в БД окажутся NULL значения.
+	// Добавлена выборка реального c.strategy_type из базы для поддержки разных режимов.
 	query := `
-		SELECT c.id, c.user_id, c.wb_token, c.keyword, c.target_place, c.max_bid, c.min_bid, c.current_bid, c.is_active 
+		SELECT 
+			c.id, 
+			c.user_id, 
+			c.wb_token, 
+			COALESCE(c.keyword, ''), 
+			COALESCE(c.strategy_type, 'target_place'),
+			COALESCE(c.target_place, 1), 
+			COALESCE(c.max_bid, 1000), 
+			COALESCE(c.min_bid, 150), 
+			COALESCE(c.current_bid, 150), 
+			c.is_active 
 		FROM campaigns c
 		JOIN users u ON c.user_id = u.id
 		WHERE c.is_active = TRUE AND u.subscription_expires_at > NOW()`
@@ -36,12 +47,14 @@ func (r *CampaignRepository) GetActiveCampaigns(ctx context.Context) ([]model.Ca
 
 	for rows.Next() {
 		var c model.Campaign
-		// Сканируем данные из строки БД напрямую в нашу Go-структуру
+		var stratType string // Временная переменная для безопасного каста строки в тип StrategyType
+
 		err := rows.Scan(
 			&c.ID,
 			&c.UserID,
 			&c.WbToken,
 			&c.Strategy.Keyword,
+			&stratType,
 			&c.Strategy.TargetPlace,
 			&c.Strategy.MaxBid,
 			&c.Strategy.MinBid,
@@ -52,8 +65,8 @@ func (r *CampaignRepository) GetActiveCampaigns(ctx context.Context) ([]model.Ca
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
-		// Проставляем тип стратегии по умолчанию, так как мы работаем с АРК
-		c.Strategy.Type = model.StrategyTargetPlace
+		// Валидируем и присваиваем тип стратегии
+		c.Strategy.Type = model.StrategyType(stratType)
 		campaigns = append(campaigns, c)
 	}
 
