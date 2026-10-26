@@ -1,0 +1,58 @@
+    <!-- Логика скриптов авторизации -->
+    <script>
+        const authForm = document.getElementById('authForm');
+        const authTitle = document.getElementById('authTitle');
+        const submitBtn = document.getElementById('submitBtn');
+        const toggleAuth = document.getElementById('toggleAuth');
+        let isLogin = true;
+
+        // Чистые SVG-строки без битых XML пространств имен
+        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+        const registerSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+
+        toggleAuth.addEventListener('click', () => {
+            isLogin = !isLogin;
+            authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
+            submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
+            toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
+        });
+
+        authForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
+            
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) { 
+                    alert(data.error || 'Ошибка авторизации'); 
+                    return; 
+                }
+
+                if (isLogin) {
+                    localStorage.setItem('jwt_token', data.token);
+                    // Перенаправляем на страницу личного кабинета
+                    window.location.href = '/dashboard.html';
+                } else {
+                    alert('Регистрация успешна! Теперь вы можете войти.');
+                    isLogin = true;
+                    // Имитируем клик, чтобы вернуть интерфейс в режим входа
+                    authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
+                    submitBtn.innerText = 'Войти';
+                    toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
+                }
+            } catch (err) { 
+                alert('Ошибка сети: не удалось связаться с Go-сервером'); 
+            }
+        });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,148 @@
+    <!-- Логика скриптов личного кабинета -->
+    <script>
+        const campaignForm = document.getElementById('campaignForm');
+        const buySubBtn = document.getElementById('buySubBtn');
+
+        // Получение актуальной цены подписки из БД
+        async function fetchCabinetPrice() {
+            try {
+                const response = await fetch('/api/public/price');
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('cabinetPrice').innerText = 
+                        data.price.toLocaleString('ru-RU');
+                }
+            } catch (err) { 
+                document.getElementById('cabinetPrice').innerText = '2 990'; 
+            }
+        }
+        fetchCabinetPrice();
+
+        // Вебхук оплаты подписки
+        buySubBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/payments/webhook', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: 1, status: "succeeded", amount: 2990 })
+                });
+                if (response.ok) { 
+                    alert('Оплата успешна! Подписка продлена.'); 
+                    window.location.reload(); 
+                }
+            } catch (err) { 
+                alert('Ошибка сети'); 
+            }
+        });
+
+        // Добавление АРК кампании под защитой JWT
+        campaignForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const token = localStorage.getItem('jwt_token');
+            const bodyData = {
+                id: parseInt(document.getElementById('campId').value),
+                wb_token: document.getElementById('wbToken').value,
+                keyword: document.getElementById('keyword').value,
+                target_place: parseInt(document.getElementById('targetPlace').value),
+                max_bid: parseInt(document.getElementById('maxBid').value),
+                min_bid: parseInt(document.getElementById('minBid').value)
+            };
+            try {
+                const response = await fetch('/api/campaigns', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json', 
+                        'Authorization': `Bearer ${token}` 
+                    },
+                    body: JSON.stringify(bodyData)
+                });
+                if (response.ok) { 
+                    alert('Кампания успешно добавлена!'); 
+                    campaignForm.reset(); 
+                    loadCampaignLogs(bodyData.id); 
+                } else {
+                    const data = await response.json();
+                    alert('Ошибка: ' + data.error);
+                }
+            } catch (err) { 
+                alert('Ошибка сети при отправке данных в Go'); 
+            }
+        });
+                // Загрузка логов изменений ставок воркерами из PostgreSQL
+        async function loadCampaignLogs(campaignId) {
+            const token = localStorage.getItem('jwt_token');
+            try {
+                const response = await fetch(`/api/campaigns/${campaignId}/logs`, { 
+                    headers: { 'Authorization': `Bearer ${token}` } 
+                });
+                if (!response.ok) return;
+                const logs = await response.json();
+                const tbody = document.getElementById('campaignsTable');
+                tbody.innerHTML = ''; 
+                
+                if (!logs || logs.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="p-3 text-center text-slate-400">Пока нет истории проверок</td></tr>`;
+                    return;
+                }
+                logs.forEach(log => {
+                    const date = new Date(log.created_at).toLocaleTimeString('ru-RU', { 
+                        hour: '2-digit', minute:'2-digit', second:'2-digit' 
+                    });
+                    const marketDisplay = (log.market_bids && log.market_bids.length > 0) 
+                        ? `[${log.market_bids.slice(0,4).join(', ')}...]` 
+                        : '[150, 150, 150...]';
+                    tbody.innerHTML += `
+                        <tr class="border-b border-purple-50 hover:bg-purple-50/50 transition">
+                            <td class="p-3 font-semibold text-slate-600">№ ${campaignId} <span class="text-xs text-slate-400 block mt-0.5">${date}</span></td>
+                            <td class="p-3 text-slate-800 font-medium">${log.status_message}</td>
+                            <td class="p-3 font-extrabold text-purple-600 text-base">${log.new_bid} руб.</td>
+                            <td class="p-3 font-mono text-xs text-slate-500">${marketDisplay}</td>
+                            <td class="p-3"><span class="px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">В работе</span></td>
+                        </tr>
+                    `;
+                });
+            } catch (err) { 
+                console.error("Ошибка обновления дашборда"); 
+            }
+        }
+
+        // Вывод реального статуса подписки и лимитов из базы данных
+        async function loadSubscriptionStatus() {
+            const token = localStorage.getItem('jwt_token');
+            try {
+                const response = await fetch('/api/user/profile', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!response.ok) return;
+                
+                const profile = await response.json();
+                const expires = new Date(profile.expires_at).toLocaleDateString('ru-RU');
+                const limit = profile.campaign_limit;
+
+                // Сверяем лимит: если он равен trial_campaign_limit (<= 5), значит это триал
+                const isTrial = limit <= 5;
+                
+                if (isTrial) {
+                    document.getElementById('subStatus').innerHTML = 
+                        `Режим: <span class="text-amber-600 font-bold">Пробный период</span> (До: ${expires}). Лимит кампаний: <span class="font-bold">${limit}</span>.`;
+                } else {
+                    document.getElementById('subStatus').innerHTML = 
+                        `Режим: <span class="text-emerald-600 font-bold">Премиум подписка</span> (Активна до: ${expires}). Лимит: ${limit} кампаний.`;
+                }
+            } catch (err) { 
+                console.error("Ошибка загрузки профиля"); 
+            }
+        }
+
+        // Фоновый автоматический опрос логов и статуса профиля
+        if (localStorage.getItem('jwt_token')) {
+            loadCampaignLogs(554433);
+            loadSubscriptionStatus();
+            
+            // Интервалы опроса (логи - 10 сек, профиль - 30 сек)
+            setInterval(loadSubscriptionStatus, 30000);
+            setInterval(() => loadCampaignLogs(554433), 10000);
+        }
+    </script>
+  </body>
+</html>
