@@ -2,12 +2,37 @@
 <html lang="ru">
 <head>
     <meta charset="utf-8">
-    <title>Документы сервиса</title>
+    <title>Пользовательское соглашение - WB-Bidder</title>
 </head>
-<body style="font-family: sans-serif; padding: 40px; background: #faf5ff; color: #1e293b;">
-    <h1>Раздел правовой информации</h1>
-    <p>Документы Самозанятого Кузнецова А.В. находятся в процессе финальной редакции...</p>
+<body style="font-family: sans-serif; padding: 40px; background: #faf5ff; color: #1e293b; max-width: 800px; margin: 0 auto; line-height: 1.6;">
+    <h1>Пользовательское соглашение</h1>
+    
+    <!-- Заменено bg на background-color -->
+    <pre id="documentText" style="white-space: pre-wrap; font-family: sans-serif; background-color: white; padding: 20px; border-radius: 12px; border: 1px solid #e9d5ff;"></pre>
+    
     <br>
-    <a href="/" style="color: #9333ea; font-weight: bold;">На главную</a>
+    <div id="footerRequisites" style="margin-top: 40px; font-size: 14px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 20px;">
+        Загрузка реквизитов...
+    </div>
+    <br>
+    <a href="/" style="color: #9333ea; font-weight: bold; text-decoration: none;">← На главную</a>
+
+    <script>
+        fetch('/data/terms.txt')
+            .then(res => res.text())
+            .then(text => document.getElementById('documentText').innerText = text)
+            .catch(() => document.getElementById('documentText').innerText = 'Ошибка загрузки документа.');
+
+        fetch('/data/requisites.json')
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('footerRequisites').innerHTML = `
+                    Правовая информация:<br>
+                    ${data.status} ${data.fio}<br>
+                    ИНН: ${data.inn}<br>
+                    Email: ${data.email} | Тел: ${data.phone}
+                `;
+            });
+    </script>
 </body>
 </html>
