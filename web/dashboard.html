@@ -32,14 +32,14 @@
             });
         }
 
-        // Клик по кнопке OAuth (имитация авторизации в 1 клик через шлюз WB)
+        // Клик по кнопке OAuth (имитация авторизации через шлюз WB)
         const wbOAuthBtn = document.getElementById('wbOAuthBtn');
         if (wbOAuthBtn) {
             wbOAuthBtn.addEventListener('click', () => {
-                alert('Запуск OAuth: Платформа перенаправляет вас на официальный шлюз Wildberries для подтверждения доступов...');
+                alert('Запуск OAuth: Перенаправление на шлюз Wildberries...');
                 const mockOauthSignal = document.getElementById('oauthConnectedSignal');
                 if (mockOauthSignal) mockOauthSignal.value = "oauth_success_test_callback_token";
-                alert('Упрощённое подключение по протоколу OAuth 2.0 успешно выполнено!');
+                alert('Упрощённое подключение по протоколу OAuth 2.0 выполнено!');
             });
         }
 
@@ -49,8 +49,7 @@
                 const response = await fetch('/api/public/price');
                 if (response.ok) {
                     const data = await response.json();
-                    document.getElementById('cabinetPrice').innerText = 
-                        data.price.toLocaleString('ru-RU');
+                    document.getElementById('cabinetPrice').innerText = data.price.toLocaleString('ru-RU');
                 }
             } catch (err) { 
                 document.getElementById('cabinetPrice').innerText = '2 990'; 
@@ -58,6 +57,34 @@
         }
         fetchCabinetPrice();
 
+        // Проверка разрешенных протоколов администратором (Закладка под самозанятых)
+        async function checkAllowedAuthProtocol() {
+            const token = localStorage.getItem('jwt_token');
+            try {
+                const response = await fetch('/api/user/profile', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (response.ok) {
+                    const user = await response.json();
+                    if (user.allowed_auth_protocol === 'manual') {
+                        if (tabOAuth) tabOAuth.style.display = 'none';
+                        if (tabToken) {
+                            tabToken.click();
+                            tabToken.className = "w-full py-2 text-xs font-bold rounded-lg text-purple-600 bg-white shadow-sm";
+                        }
+                    } else if (user.allowed_auth_protocol === 'oauth') {
+                        if (tabToken) tabToken.style.display = 'none';
+                        if (tabOAuth) {
+                            tabOAuth.click();
+                            tabOAuth.className = "w-full py-2 text-xs font-bold rounded-lg text-purple-600 bg-white shadow-sm";
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Ошибка верификации протоколов доступа:", err);
+            }
+        }
+        checkAllowedAuthProtocol();
         // Вебхук оплаты подписки
         buySubBtn.addEventListener('click', async () => {
             try {
@@ -75,12 +102,11 @@
             }
         });
 
-        // Добавление АРК кампании под защитой JWT с поддержкой гибридного режима
+        // Добавление АРК кампании под защитой JWT
         campaignForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const token = localStorage.getItem('jwt_token');
             
-            // Определяем значение токена в зависимости от активного таба
             let finalWbToken = "";
             if (activeMethod === 'token') {
                 finalWbToken = document.getElementById('wbToken').value;
@@ -91,7 +117,7 @@
             const bodyData = {
                 id: parseInt(document.getElementById('campId').value),
                 wb_token: finalWbToken,
-                connection_type: activeMethod, // Передаем тип подключения на бэкенд
+                connection_type: activeMethod,
                 keyword: document.getElementById('keyword').value,
                 target_place: parseInt(document.getElementById('targetPlace').value),
                 max_bid: parseInt(document.getElementById('maxBid').value),
@@ -172,7 +198,6 @@
                 const profile = await response.json();
                 const expires = new Date(profile.expires_at).toLocaleDateString('ru-RU');
                 const limit = profile.campaign_limit;
-
                 const isTrial = limit <= 5;
                 
                 if (isTrial) {
@@ -180,7 +205,7 @@
                         `Режим: <span class="text-amber-600 font-bold">Пробный период</span> (До: ${expires}). Лимит кампаний: <span class="font-bold">${limit}</span>.`;
                 } else {
                     document.getElementById('subStatus').innerHTML = 
-                        `Режим: <span class="text-emerald-600 font-bold">Премиум подписка</span> (Активна до: ${expires}). Лимит: ${limit} кампаний.`;
+                        `Режим: <span class="text-emerald-600 font-bold">Премиум подписка</span> (Активна до: ${expires}). Лимит: ${limit} campaigns.`;
                 }
             } catch (err) { 
                 console.error("Ошибка загрузки профиля"); 

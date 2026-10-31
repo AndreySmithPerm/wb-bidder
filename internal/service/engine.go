@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log"
+	"time"
 	"wb-bidder/internal/model"
 )
 
@@ -22,6 +23,29 @@ func NewBidderEngine(client WBClient) *BidderEngine {
 func (e *BidderEngine) CalculateAndApplyARC(ctx context.Context, campaign *model.Campaign, competitorsBids []int) error {
 	strat := campaign.Strategy
 
+	// Внедряем ночное сбережение бюджета селлера
+	loc, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		// Безопасный дефолт (MSK UTC+3), если на сервере нет базы tzdata
+		loc = time.FixedZone("MSK", 3*60*60)
+	}
+
+	currentHour := time.Now().In(loc).Hour()
+
+	// Если время от 1:00 ночи до 6:00 утра — переводим кампанию на эконом-режим
+	if currentHour >= 1 && currentHour < 6 {
+		log.Printf("[НОЧНАЯ ЗАЩИТА] Аккаунт кампании %d: трафик минимален. Выставляем минимальную ставку MinBid (%d руб.).", campaign.ID, strat.MinBid)
+
+		// Сразу проверяем: если текущая ставка уже равна минимальной, то слать лишний запрос в WB API не нужно
+		if campaign.CurrentBid == strat.MinBid {
+			log.Printf("[НОЧНАЯ ЗАЩИТА] Кампания %d: минимальная ставка %d руб. уже установлена и оптимальна.", campaign.ID, campaign.CurrentBid)
+			return nil
+		}
+
+		// Моментально применяем минимальную ставку через ваш родной вспомогательный метод
+		return e.applyNewBid(ctx, campaign, strat.MinBid)
+	}
+
 	// 1. ЗАЩИТА ОТ ПАНИКИ: если аукцион пуст, ставим минимальную ставку селлера
 	if len(competitorsBids) == 0 {
 		log.Printf("[АРК] Кампания %d: Аукцион пуст для фразы '%s'. Выставляем MinBid (%d руб.).",
@@ -36,8 +60,6 @@ func (e *BidderEngine) CalculateAndApplyARC(ctx context.Context, campaign *model
 	}
 
 	// 3. ПРАВИЛЬНЫЙ АЛГОРИТМ АРК:
-	// Ищем максимальную ставку среди конкурентов от 1-го места до нашего целевого.
-	// Это гарантирует, что мы перебьем их силу бустинга в этом диапазоне.
 	maxCompetitorBid := 0
 	for i := 0; i < maxAvailablePlace; i++ {
 		if competitorsBids[i] > maxCompetitorBid {

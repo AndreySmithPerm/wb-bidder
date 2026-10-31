@@ -34,3 +34,6 @@ CREATE TABLE IF NOT EXISTS bid_logs (
 CREATE INDEX IF NOT EXISTS idx_campaigns_is_active ON campaigns(is_active) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_users_sub_expiry ON users(subscription_expires_at);
 CREATE INDEX IF NOT EXISTS idx_bid_logs_campaign_id ON bid_logs(campaign_id, created_at DESC);
+
+ALTER TABLE users ADD COLUMN allowed_auth_protocol VARCHAR(20) DEFAULT 'manual';
+-- Значения: 'manual' (ручные токены), 'oauth' (автоматический протокол Wildberries), 'both' (разрешено всё)

@@ -209,6 +209,23 @@ type CreateCampaignDTO struct {
 func (h *Handler) AddCampaign(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(int64)
 
+	// ПРОВЕРКА ПРОТОКОЛА АДМИНИСТРАТОРОМ:
+	var allowedProtocol string
+	err := h.pool.QueryRow(context.Background(), "SELECT allowed_auth_protocol FROM users WHERE id = $1", userID).Scan(&allowedProtocol)
+
+	// Если в БД пусто или произошла ошибка — по умолчанию выставляем "manual" (безопасно для самозанятых)
+	if err != nil {
+		allowedProtocol = "manual"
+	}
+
+	// ЗАКЛАДКА НА БУДУЩЕЕ: Если админ принудительно включит 'oauth' для ИП/ООО, ручной ввод заблокируется
+	if allowedProtocol == "oauth" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Для вашего аккаунта активирован автоматический протокол OAuth. Пожалуйста, привяжите кабинет через официальное окно авторизации Wildberries.",
+		})
+	}
+
+	// ДНЕВНОЙ СТАНДАРТНЫЙ ЦИКЛ: Парсим входящие данные и сохраняем ручные токены в Postgres
 	var dto CreateCampaignDTO
 	if err := c.BodyParser(&dto); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON"})
@@ -224,7 +241,7 @@ func (h *Handler) AddCampaign(c *fiber.Ctx) error {
 		ON CONFLICT (id) DO UPDATE 
 		SET wb_token = EXCLUDED.wb_token, keyword = EXCLUDED.keyword, target_place = EXCLUDED.target_place, max_bid = EXCLUDED.max_bid, min_bid = EXCLUDED.min_bid`
 
-	_, err := h.pool.Exec(context.Background(), query, dto.ID, userID, dto.WbToken, dto.Keyword, dto.TargetPlace, dto.MaxBid, dto.MinBid)
+	_, err = h.pool.Exec(context.Background(), query, dto.ID, userID, dto.WbToken, dto.Keyword, dto.TargetPlace, dto.MaxBid, dto.MinBid)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -344,24 +361,27 @@ func (h *Handler) GetPublicPrice(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"price": price})
 }
 
-// GetUserProfile возвращает данные подписки вошедшего селлера
+// GetUserProfile возвращает данные подписки и текущий протокол авторизации селлера
 func (h *Handler) GetUserProfile(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(int64)
 
 	var email string
 	var expiresAt time.Time
 	var campaignLimit int
+	var allowedProtocol string
 
-	query := `SELECT email, subscription_expires_at, campaign_limit FROM users WHERE id = $1`
-	err := h.pool.QueryRow(context.Background(), query, userID).Scan(&email, &expiresAt, &campaignLimit)
+	// Считываем профиль. Если поле протокола вернет NULL, Go обработает это без паники
+	query := `SELECT email, subscription_expires_at, campaign_limit, COALESCE(allowed_auth_protocol, 'manual') FROM users WHERE id = $1`
+	err := h.pool.QueryRow(context.Background(), query, userID).Scan(&email, &expiresAt, &campaignLimit, &allowedProtocol)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "User not found"})
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"email":          email,
-		"expires_at":     expiresAt,
-		"campaign_limit": campaignLimit,
+		"email":                 email,
+		"expires_at":            expiresAt,
+		"campaign_limit":        campaignLimit,
+		"allowed_auth_protocol": allowedProtocol, // Фронтенд увидит 'manual' и откроет ввод токенов
 	})
 }
 
