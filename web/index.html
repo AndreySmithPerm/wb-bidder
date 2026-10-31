@@ -205,10 +205,29 @@
                 forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
             }
 
-            // Просто включаем видимость оригинального блока. Облачный скрипт Яндекса сам всё отрендерит!
             const container = document.getElementById('captchaContainer');
             if (container) {
-                container.style.display = isLogin ? 'none' : 'block';
+                if (!isLogin) {
+                    container.style.display = 'block';
+                    // Очищаем контейнер и создаем чистый блок для рендеринга капчи
+                    container.innerHTML = '<div id="yandex-captcha-box" class="smart-captcha"></div>';
+                    
+                    // Передаем ваш новый боевой ключ напрямую в API Яндекса
+                    setTimeout(() => {
+                        if (window.smartCaptcha) {
+                            window.smartCaptcha.render('yandex-captcha-box', {
+                                // === ВНИМАНИЕ: ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ ИЗ КОНСОЛИ ЯНДЕКСА (вместо ysc1_...) ===
+                                sitekey: 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1',
+                                callback: function(token) {
+                                    console.log("Токен капчи успешно получен селлером");
+                                }
+                            });
+                        }
+                    }, 50);
+                } else {
+                    container.style.display = 'none';
+                    container.innerHTML = '';
+                }
             }
         });
 
