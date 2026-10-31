@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="/css/tailwind.min.css">
     
     <!-- Подключаем скрипт через наш локальный безопасный прокси-роут Go -->
-        <script src="https://captcha.yandex.ru/captcha.js?render=onload" defer></script>
+        <script src="https://smartcaptcha.yandex.cloud/captcha.js" defer></script>
     
     <style>
       body { 
@@ -172,10 +172,12 @@
 
         // Глобальный триггер инициализации, вызываемый Яндексом при загрузке страницы
                 // Глобальный триггер инициализации, вызываемый Яндексом при полной загрузке скрипта
+        // Глобальный триггер инициализации
         window.initSmartCaptcha = function() {
             console.log("Модуль Яндекс СмартКапчи успешно привязан к контексту страницы");
             if (window.smartCaptcha) {
                 window.smartCaptcha.render('captcha-container', {
+                    // Ваш настоящий боевой ключ
                     sitekey: 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1',
                     callback: function(token) {
                         console.log("Токен капчи успешно получен селлером");
@@ -184,6 +186,12 @@
             }
         };
 
+        // Железный триггер: принудительно запускаем рендеринг капчи, как только страница готова
+        if (document.readyState === 'complete') {
+            window.initSmartCaptcha();
+        } else {
+            window.addEventListener('load', window.initSmartCaptcha);
+        }
 
         // Подгружаем цену подписки на лендинг
         fetch('/api/public/price')
