@@ -31,7 +31,7 @@ func NewHandler(pool *pgxpool.Pool) *Handler {
 
 // ProxyYandexCaptcha скачивает скрипт напрямую у Яндекса и отдает его от имени вашего домена, обходя любые блокировки DNS
 func (h *Handler) ProxyYandexCaptcha(c *fiber.Ctx) error {
-	cleanURL := "https://yandex.cloud"
+	cleanURL := strings.ReplaceAll("https://captcha.yandex.ru/captcha.js?render=onload", "*", "")
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(cleanURL)
