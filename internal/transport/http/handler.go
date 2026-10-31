@@ -29,6 +29,23 @@ func NewHandler(pool *pgxpool.Pool) *Handler {
 	return &Handler{pool: pool}
 }
 
+// ProxyYandexCaptcha скачивает скрипт напрямую у Яндекса и отдает его от имени вашего домена, обходя любые блокировки DNS
+func (h *Handler) ProxyYandexCaptcha(c *fiber.Ctx) error {
+	cleanURL := "https://yandex.cloud"
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(cleanURL)
+	if err != nil {
+		log.Printf("[ПРОКСИ ОШИБКА] Не удалось связаться с облаком Яндекса: %v", err)
+		return c.Status(fiber.StatusBadGateway).SendString("Gateway Error")
+	}
+	defer resp.Body.Close()
+
+	// Выставляем правильный MIME-тип для JavaScript
+	c.Set("Content-Type", "application/javascript; charset=utf-8")
+	return c.SendStream(resp.Body)
+}
+
 // GetStatus возвращает статус работоспособности бэкенда
 func (h *Handler) GetStatus(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{

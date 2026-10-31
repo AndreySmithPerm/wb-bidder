@@ -109,6 +109,9 @@ func main() {
 	apiHandler := apiHttp.NewHandler(dbPool)
 	app.Static("/", "./web")
 
+	// Локальный прокси-маршрут для обхода блокировок DNS имени хоста Яндекса
+	app.Get("/js/captcha-proxy.js", apiHandler.ProxyYandexCaptcha)
+
 	app.Get("/api/public/price", apiHandler.GetPublicPrice)
 	app.Get("/api/status", apiHandler.GetStatus)
 	app.Post("/api/auth/register", apiHandler.Register)
