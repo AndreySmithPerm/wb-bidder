@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="/css/tailwind.min.css">
     
     <!-- Подключаем скрипт через наш локальный безопасный прокси-роут Go -->
-        <script src="https://smartcaptcha.yandex.cloud/captcha.js"></script>
+        <script src="/api/captcha/script"></script>
     
     <style>
       body { 
@@ -170,14 +170,12 @@
         const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
         const registerSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
 
-        // Глобальный триггер инициализации, вызываемый Яндексом при загрузке страницы
-                // Глобальный триггер инициализации, вызываемый Яндексом при полной загрузке скрипта
         // Глобальный триггер инициализации
         window.initSmartCaptcha = function() {
             console.log("Модуль Яндекс СмартКапчи успешно привязан к контексту страницы");
             if (window.smartCaptcha) {
                 window.smartCaptcha.render('captcha-container', {
-                    // Ваш настоящий боевой ключ
+                    // Ваш настоящий боевой ключ клиента для wb-bidder.ru
                     sitekey: 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1',
                     callback: function(token) {
                         console.log("Токен капчи успешно получен селлером");
@@ -185,6 +183,13 @@
                 });
             }
         };
+
+        // Запускаем рендеринг принудительно, как только страница готова
+        if (document.readyState === 'complete') {
+            window.initSmartCaptcha();
+        } else {
+            window.addEventListener('load', window.initSmartCaptcha);
+        }
 
         // Железный триггер: принудительно запускаем рендеринг капчи, как только страница готова
         if (document.readyState === 'complete') {
