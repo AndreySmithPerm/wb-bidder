@@ -104,7 +104,7 @@
 
             <!-- Контейнер для гарантированного отображения видимой капчи -->
             <div id="captchaContainer" style="display: none;" class="mb-4 flex justify-center">
-              <div id="captcha-container" class="smart-captcha"></div>
+                <div id="captcha-container" class="smart-captcha"></div>
             </div>
 
             <button type="submit" id="submitBtn" 
@@ -171,9 +171,19 @@
         const registerSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
 
         // Глобальный триггер инициализации, вызываемый Яндексом при загрузке страницы
+                // Глобальный триггер инициализации, вызываемый Яндексом при полной загрузке скрипта
         window.initSmartCaptcha = function() {
             console.log("Модуль Яндекс СмартКапчи успешно привязан к контексту страницы");
+            if (window.smartCaptcha) {
+                window.smartCaptcha.render('captcha-container', {
+                    sitekey: 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1',
+                    callback: function(token) {
+                        console.log("Токен капчи успешно получен селлером");
+                    }
+                });
+            }
         };
+
 
         // Подгружаем цену подписки на лендинг
         fetch('/api/public/price')
@@ -205,29 +215,10 @@
                 forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
             }
 
+            // Просто включаем или выключаем видимость блока, где капча уже создана Яндексом автоматически!
             const container = document.getElementById('captchaContainer');
             if (container) {
-                if (!isLogin) {
-                    container.style.display = 'block';
-                    // Очищаем контейнер и создаем чистый блок для рендеринга капчи
-                    container.innerHTML = '<div id="yandex-captcha-box" class="smart-captcha"></div>';
-                    
-                    // Передаем ваш новый боевой ключ напрямую в API Яндекса
-                    setTimeout(() => {
-                        if (window.smartCaptcha) {
-                            window.smartCaptcha.render('captcha-container', {
-                                sitekey: 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1',
-                                callback: function(token) {
-                                    console.log("Токен капчи успешно получен селлером");
-                                }
-                            });
-
-                        }
-                    }, 50);
-                } else {
-                    container.style.display = 'none';
-                    container.innerHTML = '';
-                }
+                container.style.display = isLogin ? 'none' : 'block';
             }
         });
 
