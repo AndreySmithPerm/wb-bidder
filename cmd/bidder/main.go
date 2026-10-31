@@ -113,6 +113,8 @@ func main() {
 	app.Get("/api/status", apiHandler.GetStatus)
 	app.Post("/api/auth/register", apiHandler.Register)
 	app.Post("/api/auth/login", apiHandler.Login)
+	app.Post("/api/auth/reset-password", apiHandler.ResetPassword)
+	app.Post("/api/auth/save-password", apiHandler.SavePassword)
 	app.Post("/api/payments/webhook", apiHandler.HandlePaymentWebhook)
 	app.Get("/api/admin/stats", apiHandler.AuthMiddleware, apiHandler.AdminMiddleware, apiHandler.GetAdminStats)
 	app.Post("/api/campaigns", apiHandler.AuthMiddleware, apiHandler.AddCampaign)

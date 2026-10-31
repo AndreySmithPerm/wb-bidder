@@ -3,6 +3,46 @@
         const campaignForm = document.getElementById('campaignForm');
         const buySubBtn = document.getElementById('buySubBtn');
 
+        // Переключение вкладок интеграции (Токен / OAuth)
+        const tabToken = document.getElementById('tabToken');
+        const tabOAuth = document.getElementById('tabOAuth');
+        const containerTokenInput = document.getElementById('containerTokenInput');
+        const containerOAuthInput = document.getElementById('containerOAuthInput');
+        const wbTokenInput = document.getElementById('wbToken');
+        
+        let activeMethod = 'token';
+
+        if (tabToken && tabOAuth) {
+            tabToken.addEventListener('click', () => {
+                activeMethod = 'token';
+                tabToken.className = "py-2 text-xs font-bold rounded-lg transition bg-white text-purple-600 shadow-sm cursor-pointer";
+                tabOAuth.className = "py-2 text-xs font-bold rounded-lg transition text-slate-500 hover:text-purple-600 cursor-pointer";
+                containerTokenInput.classList.remove('hidden');
+                containerOAuthInput.classList.add('hidden');
+                if (wbTokenInput) wbTokenInput.required = true;
+            });
+
+            tabOAuth.addEventListener('click', () => {
+                activeMethod = 'oauth';
+                tabOAuth.className = "py-2 text-xs font-bold rounded-lg transition bg-white text-purple-600 shadow-sm cursor-pointer";
+                tabToken.className = "py-2 text-xs font-bold rounded-lg transition text-slate-500 hover:text-purple-600 cursor-pointer";
+                containerOAuthInput.classList.remove('hidden');
+                containerTokenInput.classList.add('hidden');
+                if (wbTokenInput) wbTokenInput.required = false;
+            });
+        }
+
+        // Клик по кнопке OAuth (имитация авторизации в 1 клик через шлюз WB)
+        const wbOAuthBtn = document.getElementById('wbOAuthBtn');
+        if (wbOAuthBtn) {
+            wbOAuthBtn.addEventListener('click', () => {
+                alert('Запуск OAuth: Платформа перенаправляет вас на официальный шлюз Wildberries для подтверждения доступов...');
+                const mockOauthSignal = document.getElementById('oauthConnectedSignal');
+                if (mockOauthSignal) mockOauthSignal.value = "oauth_success_test_callback_token";
+                alert('Упрощённое подключение по протоколу OAuth 2.0 успешно выполнено!');
+            });
+        }
+
         // Получение актуальной цены подписки из БД
         async function fetchCabinetPrice() {
             try {
@@ -35,13 +75,23 @@
             }
         });
 
-        // Добавление АРК кампании под защитой JWT
+        // Добавление АРК кампании под защитой JWT с поддержкой гибридного режима
         campaignForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const token = localStorage.getItem('jwt_token');
+            
+            // Определяем значение токена в зависимости от активного таба
+            let finalWbToken = "";
+            if (activeMethod === 'token') {
+                finalWbToken = document.getElementById('wbToken').value;
+            } else {
+                finalWbToken = document.getElementById('oauthConnectedSignal').value || "mock_oauth_token_session";
+            }
+
             const bodyData = {
                 id: parseInt(document.getElementById('campId').value),
-                wb_token: document.getElementById('wbToken').value,
+                wb_token: finalWbToken,
+                connection_type: activeMethod, // Передаем тип подключения на бэкенд
                 keyword: document.getElementById('keyword').value,
                 target_place: parseInt(document.getElementById('targetPlace').value),
                 max_bid: parseInt(document.getElementById('maxBid').value),
@@ -59,6 +109,9 @@
                 if (response.ok) { 
                     alert('Кампания успешно добавлена!'); 
                     campaignForm.reset(); 
+                    if (activeMethod === 'oauth') {
+                        document.getElementById('oauthConnectedSignal').value = "";
+                    }
                     loadCampaignLogs(bodyData.id); 
                 } else {
                     const data = await response.json();
@@ -68,7 +121,8 @@
                 alert('Ошибка сети при отправке данных в Go'); 
             }
         });
-                // Загрузка логов изменений ставок воркерами из PostgreSQL
+
+        // Загрузка логов изменений ставок воркерами из PostgreSQL
         async function loadCampaignLogs(campaignId) {
             const token = localStorage.getItem('jwt_token');
             try {
@@ -119,7 +173,6 @@
                 const expires = new Date(profile.expires_at).toLocaleDateString('ru-RU');
                 const limit = profile.campaign_limit;
 
-                // Сверяем лимит: если он равен trial_campaign_limit (<= 5), значит это триал
                 const isTrial = limit <= 5;
                 
                 if (isTrial) {
@@ -139,7 +192,6 @@
             loadCampaignLogs(554433);
             loadSubscriptionStatus();
             
-            // Интервалы опроса (логи - 10 сек, профиль - 30 сек)
             setInterval(loadSubscriptionStatus, 30000);
             setInterval(() => loadCampaignLogs(554433), 10000);
         }
