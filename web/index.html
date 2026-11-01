@@ -7,13 +7,14 @@
     <!-- Подключаем Tailwind CSS -->
     <link rel="stylesheet" href="/css/tailwind.min.css">
     
-    <!-- Скрипт Яндекс SmartCaptcha -->
+    <!-- 1. Скрипт Яндекс SmartCaptcha -->
     <script src="https://captcha.yandex.ru/captcha.js?render=onload&onload=onYandexCaptchaLoad"></script>
-
-    <!-- 2. ВСТАВЛЯЕМ ГЛОБАЛЬНУЮ ФУНКЦИЮ СЮДА -->
+    
+    <!-- 2. ГЛОБАЛЬНЫЙ КОЛБЭК (ВСТАВИТЬ ОБЯЗАТЕЛЬНО) -->
     <script>
         window.onYandexCaptchaLoad = function() {
-            console.log('✅ Яндекс SmartCaptcha готов к работе.');
+            console.log('✅ Яндекс Капча успешно загружена. window.smartCaptcha готов.');
+            // Запускаем вашу логику инициализации виджета
             if (typeof initSmartCaptcha === 'function') {
                 initSmartCaptcha();
             }
