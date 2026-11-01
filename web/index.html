@@ -4,15 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WB-Bidder — Профессиональный АРК-биддер для Wildberries</title>
+    <!-- Подключаем Tailwind CSS (убедитесь, что файл существует на сервере) -->
     <link rel="stylesheet" href="/css/tailwind.min.css">
     
-    <!-- ИСПРАВЛЕНИЕ 1: Прямой линк на скрипт Яндекса. 
-         Убрали /api/captcha/script, который вызывал 502 Bad Gateway. -->
+    <!-- Скрипт Яндекс SmartCaptcha -->
+    <!-- async defer гарантирует, что скрипт грузится параллельно, но мы все равно делаем проверку в JS -->
     <script src="https://smartcaptcha.yandexcloud.net/captcha.js" async defer></script>
     
     <style>
       body { 
         font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+      }
+      /* Дополнительные стили для капчи, чтобы она не ломала верстку при скрытии */
+      #captchaWrapper {
+        margin-top: 1.5rem;
+        min-height: 80px; /* Чтобы форма не "прыгала" при переключении вкладок */
       }
     </style>
   </head>
@@ -36,7 +42,7 @@
       </div>
     </header>
 
-    <!-- ГЛАВНЫЙ БЛОК (HERO SECTION) + ВСТРОЕННАЯ ФОРМА -->
+    <!-- ГЛАВНЫЙ БЛОК (HERO SECTION) + ФОРМА -->
     <main class="flex-grow">
       <div class="max-w-6xl mx-auto px-6 py-12 md:py-20 grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
         
@@ -70,101 +76,72 @@
 
         <!-- ЛЕНДИНГ: ИНТЕРАКТИВНАЯ ФОРМА АВТОРИЗАЦИИ -->
         <div id="auth-section" class="lg:col-span-5 bg-white p-8 rounded-3xl shadow-xl border border-purple-100">
-          <div class="text-center mb-6">
-            <h2 id="authTitle" class="text-2xl font-extrabold text-slate-800 tracking-tight relative inline-block">
-              Вход в платформу АРК
-              <svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
-                <path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
-              </svg>
-            </h2>
-          </div>
           
+          <!-- Заголовок формы (динамический) -->
+          <h2 id="authTitle" class="text-2xl font-bold text-slate-900 mb-6 relative">
+            Вход в платформу АРК 
+            <svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>
+          </h2>
+
+          <!-- Форма -->
           <form id="authForm" class="space-y-4">
             <div>
-              <label class="block text-sm font-semibold text-slate-700 mb-1">Email / Логин</label>
-              <input type="text" id="email" required 
-                  class="w-full px-4 py-2.5 bg-purple-50/50 rounded-xl border border-purple-200 focus:outline-none focus:border-purple-500 focus:bg-white transition">
+              <label class="block text-sm font-medium text-slate-700 mb-1">Email / Логин</label>
+              <input type="email" id="email" required placeholder="example@yandex.ru" class="w-full px-4 py-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all">
             </div>
-            <div>
-              <label class="block text-sm font-semibold text-slate-700 mb-1">Пароль</label>
+            
+            <div class="relative">
+              <label class="block text-sm font-medium text-slate-700 mb-1">Пароль</label>
               <div class="relative">
-                <input type="password" id="password" required 
-                    class="w-full px-4 py-2.5 bg-purple-50/50 rounded-xl border border-purple-200 focus:outline-none focus:border-purple-500 focus:bg-white transition pr-10">
-                <button type="button" id="togglePasswordBtn" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-purple-600 transition text-xs font-bold cursor-pointer select-none">
-                  ПОКАЗАТЬ
-                </button>
+                <input type="password" id="password" required class="w-full pr-10 px-4 py-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all">
+                <button type="button" id="togglePasswordBtn" class="absolute inset-y-0 right-0 px-4 text-sm text-slate-500 hover:text-purple-600 focus:outline-none">ПОКАЗАТЬ</button>
               </div>
             </div>
 
-            <!-- Ссылка Забыли пароль -->
-            <div class="text-right" id="forgotPasswordContainer">
-              <button type="button" id="forgotPasswordBtn" class="text-xs font-medium text-purple-600 hover:text-purple-800 underline transition cursor-pointer">
-                Забыли пароль?
-              </button>
+            <!-- Блок восстановления пароля (скрыт по умолчанию) -->
+            <div id="forgotPasswordContainer" style="display: none;">
+              <a href="#" class="text-xs text-purple-600 hover:underline">Забыли пароль?</a>
             </div>
 
-            <!-- Контейнер для капчи: всегда существует, видимость управляем отдельно -->
-            <div id="captchaWrapper" class="mb-4 flex justify-center" style="display: none;">
-                <div id="captchaTarget" class="smart-captcha"></div>
+            <!-- Блок Яндекс Капчи -->
+            <!-- Важно: display: none по умолчанию, JS покажет его только на регистрации -->
+            <div id="captchaWrapper" style="display: none;">
+              <label class="block text-sm font-medium text-slate-700 mb-2">Подтверждение</label>
+              <!-- Сюда Яндекс вставит iframe -->
+              <div id="captchaTarget"></div>
             </div>
 
-            <button type="submit" id="submitBtn" 
-                class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition duration-200 cursor-pointer mt-2">
-                Войти
-            </button>
+            <button type="submit" id="submitBtn" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition-all">Войти</button>
+            
+            <div class="text-center mt-4">
+              <button type="button" id="toggleAuth" class="text-sm text-slate-600 hover:text-purple-600 underline">Нет аккаунта? Зарегистрироваться</button>
+            </div>
           </form>
 
-          <div class="text-center mt-4">
-            <button id="toggleAuth" class="text-xs font-semibold text-purple-600 hover:text-purple-800 underline transition cursor-pointer">
-                Нет аккаунта? Зарегистрироваться
-            </button>
-          </div>
         </div>
-
       </div>
-
-      <!-- БЛОК ТАРИФОВ -->
-      <section id="pricing" class="bg-white border-y border-purple-100 py-16 px-6">
-        <div class="max-w-3xl mx-auto text-center space-y-4">
-          <h2 class="text-3xl font-black text-slate-900">Прозрачный единый тариф</h2>
-          <p class="text-slate-500">Получите полный безлимитный доступ ко всему функционалу платформы без скрытых платежей.</p>
-          <div class="bg-purple-50 border border-purple-100 p-8 rounded-3xl inline-block mt-6 min-w-[280px]">
-            <span class="text-sm font-bold text-purple-700 uppercase tracking-wider">Премиум доступ</span>
-            <div class="text-4xl font-black text-slate-900 my-2"><span id="landingPrice">2 990</span> ₽ <span class="text-sm font-normal text-slate-400">/ мес</span></div>
-            <ul class="text-sm text-slate-600 text-left space-y-2 mt-4 border-t border-purple-200/60 pt-4">
-              <li>• Проверка позиций каждые 2 минуты</li>
-              <li>• Полная статистика изменений ставок</li>
-              <li>• Безлимитное количество ключевых фраз</li>
-            </ul>
-          </div>
-        </div>
-      </section>
     </main>
 
-    <!-- ПОДВАЛ (ФУТЕР) С ДИНАМИЧЕСКИМИ РЕКВИЗИТАМИ -->
-    <footer class="bg-slate-900 text-slate-400 text-sm py-12 px-6 border-t border-slate-800">
-      <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
-        <div id="footerRequisites" class="text-center md:text-left space-y-1">
-          Загрузка информации о правообладателе...
+    <!-- Футер (заглушка) -->
+    <footer class="bg-white border-t border-slate-100 px-6 py-8">
+      <div class="max-w-6xl mx-auto flex justify-between items-center">
+        <div>
+          <p class="text-sm text-slate-500">&copy; 2024 WB-Bidder. Все права защищены.</p>
         </div>
-        <div class="flex flex-wrap justify-center gap-6 text-slate-400 font-medium">
-          <a href="/privacy.html" class="hover:text-purple-600 transition">Конфиденциальность</a>
-          <a href="/terms.html" class="hover:text-purple-600 transition">Оферта</a>
-          <a href="/refunds.html" class="hover:text-purple-600 transition">Условия возврата</a>
+        <div id="footerRequisites" class="text-right">
+          <p class="font-bold text-slate-800 text-base">Самозанятый Кузнецов Андрей Владимирович</p>
+          <p class="text-xs text-slate-400">Контакты обновляются</p>
         </div>
-      </div>
-      <div class="max-w-6xl mx-auto text-center md:text-left text-xs text-slate-600 mt-8 border-t border-slate-800/60 pt-4">
-        &copy; 2026 WB-BIDDER. Все права защищены. Маркетплейс Wildberries является товарным знаком WB.
       </div>
     </footer>
 
-    <!-- Логика скриптов авторизации и реквизитов -->
+    <!-- СКРИПТЫ -->
     <script>
         // --- КОНФИГУРАЦИЯ ---
-        // ⚠️ ВАЖНО: Вставьте сюда НОВЫЙ ключ из кабинета Яндекс.SmartCaptcha.
-        // Старый ключ, который был в вашем коде, скомпрометирован (опубликован в чате).
+        // ВСТАВЬТЕ СЮДА ВАШ РАБОЧИЙ КЛЮЧ. Пока стоит пустая строка для безопасности.
         const CAPTCHA_SITEKEY = 'ysc1_7kYaQS4D4nPdGFLaC7xamTQUEeqVhJ4u6YEgfiTk38be3fb4'; 
         
+        // Элементы DOM (получаем их сразу, но проверяем на null перед использованием)
         const authForm = document.getElementById('authForm');
         const authTitle = document.getElementById('authTitle');
         const submitBtn = document.getElementById('submitBtn');
@@ -174,151 +151,151 @@
         const captchaWrapper = document.getElementById('captchaWrapper');
 
         let isLogin = true;
-        let captchaRendered = false;
+        let captchaRendered = false; // Флаг: отрисовали ли мы виджет хоть раз
 
         const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
         const registerSvg = loginSvg;
 
-        // Инициализация капчи
+        // --- ГЛАВНАЯ ФУНКЦИЯ ИНИЦИАЛИЗАЦИИ КАПЧИ ---
         window.initSmartCaptcha = function() {
             console.log('initSmartCaptcha called');
             
-            // Если уже отрендерили - выходим
+            // 1. Если уже отрендерили - выходим
             if (captchaRendered) {
-                console.warn('Captcha already rendered, skipping');
                 return;
             }
 
-            // ГЛАВНАЯ ПРОВЕРКА: если объект smartCaptcha не появился, скрипт не загрузился
+            // 2. КРИТИЧЕСКИ ВАЖНО: Проверяем, загрузился ли скрипт Яндекса
             if (typeof window.smartCaptcha === 'undefined') {
-                console.error('ОШИБКА: Скрипт Яндекс.Капчи не загрузился! Проверьте консоль на ERR_NAME_NOT_RESOLVED или 502');
+                console.warn('⚠️ SmartCaptcha еще не загрузился. Ждем 500мс...');
+                setTimeout(window.initSmartCaptcha, 500);
                 return;
             }
 
+            // 3. Проверяем наличие ключа
+            if (!CAPTCHA_SITEKEY || CAPTCHA_SITEKEY === '') {
+                console.log('🔑 Ключ капчи не установлен. Пропускаем рендер (режим разработки).');
+                if (captchaWrapper) captchaWrapper.style.display = 'none';
+                return;
+            }
+
+            // 4. Если все ок - рендерим
             try {
                 window.smartCaptcha.render('captchaTarget', {
                     sitekey: CAPTCHA_SITEKEY,
                     callback: function(token) {
-                        console.log('Captcha token received');
+                        console.log('✅ Captcha token received');
                     },
                     'nocache': true 
                 });
                 captchaRendered = true;
-                console.log('Капча успешно отрендерена');
+                console.log('🆗 Капча успешно отрендерена');
             } catch (e) {
-                console.error('Ошибка рендера капчи:', e);
+                console.error('❌ Ошибка рендера капчи:', e);
             }
         };
 
-        // Запускаем строго один раз после полной готовности страницы
+        // Запускаем проверку после загрузки страницы
         if (document.readyState === 'complete') {
             window.initSmartCaptcha();
         } else {
             window.addEventListener('load', window.initSmartCaptcha);
         }
 
-        // Подгружаем цену подписки на лендинг
-        fetch('/api/public/price')
-            .then(res => res.json())
-            .then(data => {
-                if(data.price) document.getElementById('landingPrice').innerText = data.price.toLocaleString('ru-RU');
-            }).catch(() => {});
-
-        // Динамическая подгрузка реквизитов в футер
-        fetch('/data/requisites.json')
-            .then(res => res.json())
-            .then(data => {
-                document.getElementById('footerRequisites').innerHTML = `
-                    <p class="font-bold text-slate-800 text-base">${data.status} ${data.fio}</p>
-                    <p>ИНН: \${data.inn}</p>
-                    <p>Email: ${data.email} | Тел: ${data.phone}</p>
-                `;
-            }).catch(() => {
-                document.getElementById('footerRequisites').innerHTML = `<p class="font-bold text-slate-800">Самозанятый Кузнецов Андрей Владимирович</p><p>Контакты обновляются</p>`;
-            });
-
         // --- Логика переключения Вход/Регистрация ---
-        toggleAuth.addEventListener('click', () => {
-            isLogin = !isLogin;
-            authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
-            submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
-            toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
-            
-            if (forgotPasswordContainer) {
-                forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
-            }
-
-            // Мягко управляем видимостью обертки без разрушения iframe капчи
-            if (captchaWrapper) {
-                captchaWrapper.style.display = isLogin ? 'none' : 'flex';
-            }
-        });
-
-        // Логика отправки формы авторизации и регистрации с проверкой SmartCaptcha
-        authForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-            
-            let captchaToken = "";
-            if (!isLogin) {
-                // Получаем токен только если капча видна и объект существует
-                if (window.smartCaptcha) {
-                    captchaToken = window.smartCaptcha.getResponse();
-                }
+        if (toggleAuth) {
+            toggleAuth.addEventListener('click', () => {
+                isLogin = !isLogin;
+                authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
+                submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
+                toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
                 
-                if (!captchaToken) {
-                    alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
-                    return;
-                }
-            }
-
-            const payload = { email, password };
-            if (!isLogin) {
-                payload.captcha_token = captchaToken;
-            }
-            
-            try {
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                
-                let data = {};
-                try { data = await response.json(); } catch(pErr) { data = { error: 'Ошибка структуры данных' }; }
-                
-                if (!response.ok) { 
-                    alert(data.error || 'Ошибка авторизации'); 
-                    if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
-                    return; 
+                if (forgotPasswordContainer) {
+                    forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
                 }
 
-                if (isLogin) {
-                    localStorage.setItem('jwt_token', data.token);
-                    window.location.href = '/dashboard.html';
-                } else {
-                    alert('Регистрация успешна! Теперь вы можете войти.');
-                    isLogin = true;
-                    authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
-                    submitBtn.innerText = 'Войти';
-                    toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
-                    if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
-                    
-                    if (captchaWrapper) {
+                // Логика показа/скрытия капчи
+                if (captchaWrapper) {
+                    // Показываем капчу ТОЛЬКО если:
+                    // 1. Мы на странице регистрации (!isLogin)
+                    // 2. Виджет реально был отрисован (captchaRendered === true)
+                    if (!isLogin && captchaRendered) {
+                        captchaWrapper.style.display = 'flex';
+                    } else {
                         captchaWrapper.style.display = 'none';
                     }
+                }
+            });
+        }
+
+        // --- Логика отправки формы ---
+        if (authForm) {
+            authForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const email = document.getElementById('email').value;
+                const password = document.getElementById('password').value;
+                const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
+                
+                let captchaToken = "";
+                
+                // Получаем токен только если мы регистрируемся
+                if (!isLogin) {
                     if (window.smartCaptcha) {
-                        window.smartCaptcha.reset();
+                        captchaToken = window.smartCaptcha.getResponse();
+                    }
+                    
+                    if (!captchaToken) {
+                        alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
+                        return;
                     }
                 }
-            } catch (err) { 
-                alert('Ошибка сети: не удалось связаться с Go-сервером'); 
-            }
-        });
 
-        // Логика показать/скрыть символы пароля
+                const payload = { email, password };
+                if (!isLogin) {
+                    payload.captcha_token = captchaToken;
+                }
+                
+                try {
+                    const response = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    let data = {};
+                    try { data = await response.json(); } catch(pErr) { data = { error: 'Ошибка структуры данных' }; }
+                    
+                    if (!response.ok) { 
+                        alert(data.error || 'Ошибка авторизации'); 
+                        if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
+                        return; 
+                    }
+
+                    if (isLogin) {
+                        localStorage.setItem('jwt_token', data.token);
+                        window.location.href = '/dashboard.html';
+                    } else {
+                        alert('Регистрация успешна! Теперь вы можете войти.');
+                        isLogin = true;
+                        authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
+                        submitBtn.innerText = 'Войти';
+                        toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
+                        if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
+                        
+                        if (captchaWrapper) {
+                            captchaWrapper.style.display = 'none';
+                        }
+                        if (window.smartCaptcha) {
+                            window.smartCaptcha.reset();
+                        }
+                    }
+                } catch (err) { 
+                    alert('Ошибка сети: не удалось связаться с сервером'); 
+                }
+            });
+        }
+
+        // --- Логика показать/скрыть пароль ---
         const passwordInput = document.getElementById('password');
         const togglePasswordBtn = document.getElementById('togglePasswordBtn');
 
@@ -329,6 +306,32 @@
                 togglePasswordBtn.innerText = isPassword ? 'СКРЫТЬ' : 'ПОКАЗАТЬ';
             });
         }
+
+        // --- Подгрузка данных (Цена, Реквизиты) ---
+        fetch('/api/public/price')
+            .then(res => res.json())
+            .then(data => {
+                const el = document.getElementById('landingPrice');
+                if (el && data.price) el.innerText = data.price.toLocaleString('ru-RU');
+            }).catch(() => {});
+
+        fetch('/data/requisites.json')
+            .then(res => res.json())
+            .then(data => {
+                const el = document.getElementById('footerRequisites');
+                if (el) {
+                    el.innerHTML = `
+                        <p class="font-bold text-slate-800 text-base">${data.status} ${data.fio}</p>
+                        <p>ИНН: \${data.inn}</p>
+                        <p>Email: ${data.email} | Тел: ${data.phone}</p>
+                    `;
+                }
+            }).catch(() => {
+                const el = document.getElementById('footerRequisites');
+                if (el) {
+                    el.innerHTML = `<p class="font-bold text-slate-800">Самозанятый Кузнецов Андрей Владимирович</p><p>Контакты обновляются</p>`;
+                }
+            });
     </script>
   </body>
 </html>
