@@ -8,13 +8,13 @@
     <!-- Подключаем Tailwind CSS -->
     <link rel="stylesheet" href="/css/tailwind.min.css">
 
-    <!-- Скрипт Яндекс SmartCaptcha -->
-    <script src="https://captcha.yandex.ru/captcha.js?render=onload&onload=onYandexCaptchaLoad"></script>
+    <!-- ИСПРАВЛЕНО: правильный URL и способ инициализации Яндекс SmartCaptcha -->
+    <script src="https://smartcaptcha.yandex.ru/js/loader.js"></script>
 
-    <!-- Глобальный колбэк: инициализация виджета сразу после загрузки скрипта Яндекса -->
     <script>
-      window.onYandexCaptchaLoad = function() {
-        console.log('✅ Яндекс Капча загружена, запускаем виджет...');
+      // Колбэк, который Яндекс вызовет автоматически после загрузки loader.js
+      window.smartCaptchaOnLoad = function() {
+        console.log('✅ Скрипт Яндекс Капчи загружен, инициализируем виджет...');
 
         const container = document.getElementById('captchaTarget');
         if (!container) {
@@ -22,13 +22,14 @@
           return;
         }
 
+        // Ключ берём из data-sitekey — его подставит бэкенд из переменных окружения
         const sitekey = container.dataset.sitekey;
         if (!sitekey) {
-          console.error('❌ Не указан data-sitekey в #captchaTarget. Вставьте sitekey из кабинета Яндекс Капчи.');
+          console.error('❌ Не указан data-sitekey в #captchaTarget. Проверь передачу переменной из Go.');
           return;
         }
 
-        initSmartCaptcha({
+        window.smartCaptcha.initSmartCaptcha({
           containerId: 'captchaTarget',
           sitekey: sitekey,
           callback: function(token) {
@@ -86,223 +87,110 @@
           
           <!-- ПРЕИМУЩЕСТВА -->
           <div id="features" class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
-            <div class="flex items-start space-x-3">
-              <span class="text-purple-600 font-bold text-xl">✓</span>
+            <div class="flex items-center space-x-3 p-4 bg-white border rounded-lg shadow-sm">
+              <div class="w-10 h-10 flex items-center justify-center bg-purple-50 text-purple-600 rounded-full font-bold">2м</div>
               <div>
-                <h4 class="font-bold text-slate-800">Защита от слива баланса</h4>
-                <p class="text-sm text-slate-500">Жесткие лимиты Max Bid уберегут бюджет при резких скачках аукциона.</p>
+                <h3 class="font-semibold text-slate-800">Сканирование каждые 2 минуты</h3>
+                <p class="text-xs text-slate-500">Актуальные ставки в реальном времени</p>
               </div>
             </div>
-            <div class="flex items-start space-x-3">
-              <span class="text-purple-600 font-bold text-xl">✓</span>
+            <div class="flex items-center space-x-3 p-4 bg-white border rounded-lg shadow-sm">
+              <div class="w-10 h-10 flex items-center justify-center bg-purple-50 text-purple-600 rounded-full font-bold">+1₽</div>
               <div>
-                <h4 class="font-bold text-slate-800">Многопоточные воркеры</h4>
-                <p class="text-sm text-slate-500">Параллельное управление десятками кампаний одновременно без задержек.</p>
+                <h3 class="font-semibold text-slate-800">Перебиваем на 1 рубль</h3>
+                <p class="text-xs text-slate-500">Экономия бюджета без потери позиций</p>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- ЛЕНДИНГ: ИНТЕРАКТИВНАЯ ФОРМА АВТОРИЗАЦИИ -->
-        <div id="auth-section" class="lg:col-span-5 bg-white p-8 rounded-3xl shadow-xl border border-purple-100">
-          <h2 id="authTitle" class="text-2xl font-bold text-slate-900 mb-6 relative">
-            Вход в платформу АРК 
-          </h2>
+        <!-- ФОРМА: ВХОД / РЕГИСТРАЦИЯ -->
+        <div id="auth-section" class="lg:col-span-5 bg-white border rounded-2xl shadow-xl p-8 md:p-10">
+          <div class="flex justify-center mb-6">
+            <div class="w-12 h-12 bg-purple-600 rounded-full flex items-center justify-center text-white font-bold text-xl">WB</div>
+          </div>
 
-          <form id="authForm" class="space-y-4">
-            <!-- Скрытый input для токена капчи (заполняется автоматически) -->
-            <input type="hidden" name="captcha_token" value="">
+          <!-- ТАБЫ: ВХОД / РЕГИСТРАЦИЯ -->
+          <div class="flex mb-6 border-b border-slate-200">
+            <button id="tab-login" class="w-1/2 py-3 text-center font-semibold text-purple-600 border-b-2 border-purple-600 active">Вход</button>
+            <button id="tab-register" class="w-1/2 py-3 text-center font-semibold text-slate-500 border-b-2 border-transparent hover:text-slate-700">Регистрация</button>
+          </div>
 
-            <div>
-              <label class="block text-sm font-medium text-slate-700 mb-1">Email / Логин</label>
-              <input type="email" id="email" required placeholder="example@yandex.ru" class="w-full px-4 py-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all">
+          <!-- ФОРМА ВХОДА -->
+          <form id="form-login" class="hidden">
+            <input type="hidden" name="action" value="login">
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+              <input type="email" name="email" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition" placeholder="name@example.com">
             </div>
-            
-            <div>
+            <div class="mb-4">
               <label class="block text-sm font-medium text-slate-700 mb-1">Пароль</label>
-              <div class="relative">
-                <input type="password" id="password" required class="w-full pr-10 px-4 py-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all">
-                <button type="button" id="togglePasswordBtn" class="absolute inset-y-0 right-0 px-4 text-sm text-slate-500 hover:text-purple-600 focus:outline-none font-bold">ПОКАЗАТЬ</button>
-              </div>
+              <input type="password" name="password" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition" placeholder="••••••••">
             </div>
+            <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition shadow-lg">Войти в кабинет</button>
+          </form>
 
-            <div id="forgotPasswordContainer">
-              <a href="/forgot-password.html" class="text-xs text-purple-600 hover:underline font-medium">Забыли пароль?</a>
-            </div>
-
-            <!-- Блок Яндекс Капчи (скрыт по умолчанию классом hidden) -->
-            <div id="captchaWrapper" class="hidden flex-col">
-              <label class="block text-sm font-medium text-slate-700 mb-2">Подтверждение безопасности</label>
-              <!-- sitekey нужно подставить на бэкенде (Go/Fiber) при генерации HTML -->
-              <div id="captchaTarget" data-sitekey="ВАШ_SITEKEY_ОТ_ЯНДЕКСА"></div>
-            </div>
-
-            <button type="submit" id="submitBtn" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition-all">Войти</button>
+          <!-- ФОРМА РЕГИСТРАЦИИ -->
+          <form id="form-register" class="block">
+            <input type="hidden" name="action" value="register">
             
-            <div class="text-center mt-4">
-              <button type="button" id="toggleAuth" class="text-sm text-slate-600 hover:text-purple-600 underline font-medium">Нет аккаунта? Зарегистрироваться</button>
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+              <input type="email" name="email" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition" placeholder="name@example.com">
             </div>
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-slate-700 mb-1">Пароль</label>
+              <input type="password" name="password" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition" placeholder="Придумайте пароль">
+            </div>
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-slate-700 mb-1">Подтверждение пароля</label>
+              <input type="password" name="confirm_password" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent transition" placeholder="Повторите пароль">
+            </div>
+
+            <!-- БЛОК КАПЧИ -->
+            <div id="captchaWrapper" class="mb-6">
+              <label class="block text-sm font-medium text-slate-700 mb-2">Подтверждение безопасности</label>
+              <!-- ВАЖНО: {{ .SiteKey }} подставляется бэкендом из переменных окружения -->
+              <div id="captchaTarget" data-sitekey="{{ .SiteKey }}"></div>
+              <input type="hidden" name="captcha_token" id="captcha_token">
+            </div>
+
+            <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition shadow-lg">Зарегистрироваться</button>
           </form>
         </div>
       </div>
     </main>
 
-    <!-- ФУТЕР -->
-    <footer class="bg-white border-t border-slate-100 px-6 py-8">
-      <div class="max-w-6xl mx-auto flex flex-col sm:flex-between sm:flex-row items-center justify-between gap-4">
-        <div>
-          <p class="text-sm text-slate-500">&copy; 2026 WB-Bidder. Все права защищены.</p>
-        </div>
-        <div id="footerRequisites" class="text-center sm:text-right">
-          <p class="font-bold text-slate-800 text-base">Самозанятый Кузнецов Андрей Владимирович</p>
-          <p class="text-xs text-slate-400">Контакты обновляются</p>
+    <!-- ПОДВАЛ -->
+    <footer class="bg-white border-t border-slate-100 px-6 py-8 text-slate-500 text-sm">
+      <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center">
+        <span>&copy; 2024 WB-Bidder. Все права защищены.</span>
+        <div class="flex space-x-4 mt-4 md:mt-0">
+          <a href="#" class="hover:text-purple-600">Политика конфиденциальности</a>
+          <a href="#" class="hover:text-purple-600">Поддержка</a>
         </div>
       </div>
     </footer>
 
-    <!-- ССКРИПТЫ ЛОГИКИ ИНТЕРФЕЙСА -->
+    <!-- СКРИПТЫ ПЕРЕКЛЮЧЕНИЯ ТАБОВ -->
     <script>
-      const authForm = document.getElementById('authForm');
-      const authTitle = document.getElementById('authTitle');
-      const submitBtn = document.getElementById('submitBtn');
-      const toggleAuth = document.getElementById('toggleAuth');
-      const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
-      const captchaWrapper = document.getElementById('captchaWrapper');
+      document.getElementById('tab-login').addEventListener('click', () => {
+        document.getElementById('form-login').classList.remove('hidden');
+        document.getElementById('form-register').classList.add('hidden');
+        document.getElementById('tab-login').classList.add('text-purple-600', 'border-purple-600');
+        document.getElementById('tab-login').classList.remove('text-slate-500', 'border-transparent');
+        document.getElementById('tab-register').classList.add('text-slate-500', 'border-transparent');
+        document.getElementById('tab-register').classList.remove('text-purple-600', 'border-purple-600');
+      });
 
-      let isLogin = true;
-
-      const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
-      const registerSvg = loginSvg;
-
-      // --- Переключение Вход / Регистрация ---
-      if (toggleAuth) {
-        toggleAuth.addEventListener('click', () => {
-          isLogin = !isLogin;
-
-          if (authTitle) authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
-          if (submitBtn) submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
-          if (toggleAuth) toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
-          if (forgotPasswordContainer) forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
-
-          // Показываем/скрываем капчу только визуально
-          if (!isLogin) {
-            captchaWrapper.classList.remove('hidden');
-            captchaWrapper.classList.add('flex', 'flex-col');
-          } else {
-            captchaWrapper.classList.add('hidden');
-            captchaWrapper.classList.remove('flex');
-          }
-        });
-      }
-
-      // --- Отправка формы ---
-      if (authForm) {
-        authForm.addEventListener('submit', async (e) => {
-          e.preventDefault();
-
-          const email = document.getElementById('email').value;
-          const password = document.getElementById('password').value;
-          const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-
-          let captchaToken = "";
-
-          // Если регистрация — проверяем токен
-          if (!isLogin) {
-            const tokenInput = document.querySelector('input[name="captcha_token"]');
-            captchaToken = tokenInput ? tokenInput.value : "";
-
-            if (!captchaToken) {
-              alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
-              return;
-            }
-          }
-
-          const payload = { email, password };
-          if (!isLogin) {
-            payload.captcha_token = captchaToken;
-          }
-
-          try {
-            const response = await fetch(endpoint, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-
-            let data = {};
-            try { data = await response.json(); } catch(pErr) { data = { error: 'Некорректный ответ сервера' }; }
-
-            if (!response.ok) {
-              alert(data.error || 'Произошла ошибка при аутентификации');
-              if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
-              return;
-            }
-
-            if (isLogin) {
-              localStorage.setItem('jwt_token', data.token);
-              window.location.href = '/dashboard.html';
-            } else {
-              alert('Регистрация успешно завершена! Теперь вы можете войти в свой аккаунт.');
-              isLogin = true;
-              if (authTitle) authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
-              if (submitBtn) submitBtn.innerText = 'Войти';
-              if (toggleAuth) toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
-              if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
-
-              if (captchaWrapper) {
-                captchaWrapper.classList.add('hidden');
-                captchaWrapper.classList.remove('flex');
-              }
-              if (window.smartCaptcha) {
-                window.smartCaptcha.reset();
-              }
-            }
-          } catch (err) {
-            alert('Ошибка сети: не удалось связаться с сервером');
-          }
-        });
-      }
-
-      // --- Логика пароля ---
-      const passwordInput = document.getElementById('password');
-      const togglePasswordBtn = document.getElementById('togglePasswordBtn');
-
-      if (togglePasswordBtn && passwordInput) {
-        togglePasswordBtn.addEventListener('click', () => {
-          const isPassword = passwordInput.getAttribute('type') === 'password';
-          passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
-          togglePasswordBtn.innerText = isPassword ? 'СКРЫТЬ' : 'ПОКАЗАТЬ';
-        });
-      }
-
-      // --- Подгрузка данных (цена, реквизиты) ---
-      fetch('/api/public/price')
-        .then(res => res.json())
-        .then(data => {
-          const el = document.getElementById('landingPrice');
-          if (el && data.price) el.innerText = data.price.toLocaleString('ru-RU');
-        }).catch(() => {});
-
-      fetch('/data/requisites.json')
-        .then(res => res.json())
-        .then(data => {
-          const el = document.getElementById('footerRequisites');
-          if (el) {
-            el.innerHTML = `
-                <p class="font-bold text-slate-800 text-base">${data.status} ${data.fio}</p>
-                <p class="text-xs text-slate-500">ИНН: ${data.inn}</p>
-                <p class="text-xs text-slate-500">Email: ${data.email} | Тел: ${data.phone}</p>
-            `;
-          }
-        }).catch(() => {
-          const el = document.getElementById('footerRequisites');
-          if (el) {
-            el.innerHTML = `
-                <p class="font-bold text-slate-800 text-base">Самозанятый Кузнецов Андрей Владимирович</p>
-                <p class="text-xs text-slate-400">Контакты обновляются</p>
-            `;
-          }
-        });
+      document.getElementById('tab-register').addEventListener('click', () => {
+        document.getElementById('form-login').classList.add('hidden');
+        document.getElementById('form-register').classList.remove('hidden');
+        document.getElementById('tab-register').classList.add('text-purple-600', 'border-purple-600');
+        document.getElementById('tab-register').classList.remove('text-slate-500', 'border-transparent');
+        document.getElementById('tab-login').classList.add('text-slate-500', 'border-transparent');
+        document.getElementById('tab-login').classList.remove('text-purple-600', 'border-purple-600');
+      });
     </script>
   </body>
 </html>
