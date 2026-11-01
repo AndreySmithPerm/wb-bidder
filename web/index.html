@@ -124,95 +124,110 @@
       </div>
     </footer>
     <!-- ССКРИПТЫ ЛОГИКИ ИНТЕРФЕЙСА -->
-    <script>
-        // Переменные состояния формы
+        <script>
+        // --- КОНФИГУРАЦИЯ ---
+        // ВАЖНО: Если у вас нет /api/status, раскомментируйте строку ниже и вставьте свой sitekey вручную для теста
+        // const FORCE_SITEKEY = 'ВАШ_PUBLIC_SITEKEY_ОТ_ЯНДЕКСА'; 
+        
         const authForm = document.getElementById('authForm');
         const authTitle = document.getElementById('authTitle');
         const submitBtn = document.getElementById('submitBtn');
         const toggleAuth = document.getElementById('toggleAuth');
         const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
         const captchaWrapper = document.getElementById('captchaWrapper');
+        const captchaTarget = document.getElementById('captchaTarget');
 
         let isLogin = true;
         let captchaRendered = false; 
-        let cachedCaptchaSitekey = null; // Сюда запишем ключ, полученный с сервера
+        let cachedCaptchaSitekey = null;
 
-        // Элементы SVG оформления для заголовков
         const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
         const registerSvg = loginSvg;
 
-        // --- ФУНКЦИЯ ДИНАМИЧЕСКОЙ ЗАГРУЗКИ КЛЮЧА И РЕНДЕРА ---
+        // --- ИНИЦИАЛИЗАЦИЯ КАПЧИ ---
         window.initSmartCaptcha = async function() {
             if (captchaRendered) return;
+            if (!captchaTarget) return;
 
-            // 1. Проверяем, загружен ли скрипт Яндекса в window
+            // 1. Проверка загрузки скрипта Яндекса
             if (typeof window.smartCaptcha === 'undefined') {
+                console.warn('🔄 Скрипт Яндекс Капчи еще не загружен, повтор через 300мс...');
                 setTimeout(window.initSmartCaptcha, 300);
                 return;
             }
 
-            // 2. Если ключа еще нет в памяти, запрашиваем его у бэкенда (из .env)
+            // 2. Получение ключа (с приоритетом ручного ключа для тестов)
             if (!cachedCaptchaSitekey) {
+                // if (FORCE_SITEKEY) { cachedCaptchaSitekey = FORCE_SITEKEY; } // Раскомментировать для теста без бэкенда
+                
                 try {
-                    // Запрашиваем статус системы, куда бэкенд подмешает публичный sitekey
                     const res = await fetch('/api/status');
                     const data = await res.json();
-                    
                     if (data && data.captcha_sitekey) {
                         cachedCaptchaSitekey = data.captcha_sitekey;
                     } else {
-                        console.warn('🔑 Публичный ключ капчи не возвращен сервером. Капча отключена.');
-                        if (captchaWrapper) captchaWrapper.classList.add('hidden');
+                        console.error('❌ Сервер не вернул captcha_sitekey. Проверьте /api/status');
                         return;
                     }
                 } catch (err) {
-                    console.error('❌ Не удалось загрузить конфигурацию капчи с сервера:', err);
+                    console.error('❌ Ошибка сети при получении ключа капчи:', err);
                     return;
                 }
             }
 
-            // 3. Безопасный рендер виджета Яндекса с динамическим ключом
-            try {
-                window.smartCaptcha.render('captchaTarget', {
-                    sitekey: cachedCaptchaSitekey,
-                    callback: function(token) {
-                        console.log('✅ Капча успешно пройдена, токен получен');
-                    },
-                    'nocache': true 
-                });
-                captchaRendered = true;
-                console.log('🆗 Виджет Яндекс Капчи успешно инициализирован');
-            } catch (e) {
-                console.error('❌ Критическая ошибка рендера виджета капчи:', e);
-            }
+            // 3. КРИТИЧЕСКИ ВАЖНО: Сначала делаем блок видимым, потом рендерим
+            // Виджет Яндекса не умеет рендериться в элементе с display:none
+            captchaWrapper.classList.remove('hidden');
+            captchaWrapper.classList.add('flex', 'flex-col');
+            
+            // Небольшая задержка, чтобы браузер успел отрисовать блок перед рендером виджета
+            setTimeout(() => {
+                try {
+                    window.smartCaptcha.render('captchaTarget', {
+                        sitekey: cachedCaptchaSitekey,
+                        callback: function(token) {
+                            console.log('✅ Токен получен:', token.substring(0, 10) + '...');
+                        },
+                        'nocache': true 
+                    });
+                    captchaRendered = true;
+                    console.log('🆗 Виджет успешно отрисован');
+                } catch (e) {
+                    console.error('❌ Ошибка рендера виджета:', e);
+                }
+            }, 50);
         };
 
-        // Переключение режимов: Вход / Регистрация
+        // --- ПЕРЕКЛЮЧЕНИЕ ВХОД / РЕГИСТРАЦИЯ ---
         if (toggleAuth) {
             toggleAuth.addEventListener('click', async () => {
                 isLogin = !isLogin;
                 
-                // Меняем тексты интерфейса
+                // Обновляем UI
                 if (authTitle) authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
                 if (submitBtn) submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
                 if (toggleAuth) toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
                 if (forgotPasswordContainer) forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
-                
-                // Управление отображением капчи (показываем только при Регистрации)
-                if (captchaWrapper) {
-                    if (!isLogin) {
-                        captchaWrapper.classList.remove('hidden');
-                        captchaWrapper.classList.add('flex');
-                        // Триггерим асинхронную загрузку ключа и рендер именно при переходе на регистрацию
+
+                // Логика капчи
+                if (!isLogin) {
+                    // Режим регистрации: показываем капчу и рендерим, если еще не рендерили
+                    if (!captchaRendered) {
                         await window.initSmartCaptcha();
                     } else {
-                        captchaWrapper.classList.add('hidden');
-                        captchaWrapper.classList.remove('flex');
+                        // Если уже рендерили, просто убеждаемся, что блок видим
+                        captchaWrapper.classList.remove('hidden');
+                        captchaWrapper.classList.add('flex', 'flex-col');
                     }
+                } else {
+                    // Режим входа: скрываем капчу
+                    captchaWrapper.classList.add('hidden');
+                    captchaWrapper.classList.remove('flex');
                 }
             });
         }
-        // --- Логика отправки формы на бэкенд ---
+
+        // --- ОТПРАВКА ФОРМЫ ---
         if (authForm) {
             authForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -222,7 +237,6 @@
                 
                 let captchaToken = "";
                 
-                // Получаем токен капчи только в режиме регистрации
                 if (!isLogin) {
                     if (window.smartCaptcha) {
                         captchaToken = window.smartCaptcha.getResponse();
@@ -247,24 +261,18 @@
                     });
                     
                     let data = {};
-                    try { 
-                        data = await response.json(); 
-                    } catch(pErr) { 
-                        data = { error: 'Некорректный ответ сервера' }; 
-                    }
+                    try { data = await response.json(); } catch(pErr) { data = { error: 'Некорректный ответ сервера' }; }
                     
                     if (!response.ok) { 
-                        alert(data.error || 'Произошла ошибка при аутентификации'); 
+                        alert(data.error || 'Произошла ошибка при аутентификации');
                         if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
                         return; 
                     }
 
                     if (isLogin) {
-                        // Сохраняем токен и отправляем пользователя в панель управления
                         localStorage.setItem('jwt_token', data.token);
                         window.location.href = '/dashboard.html';
                     } else {
-                        // Успешная регистрация — переключаем форму в режим входа
                         alert('Регистрация успешно завершена! Теперь вы можете войти в свой аккаунт.');
                         isLogin = true;
                         if (authTitle) authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
@@ -286,7 +294,7 @@
             });
         }
 
-        // --- Логика переключения видимости пароля ---
+        // --- ЛОГИКА ПАРОЛЯ ---
         const passwordInput = document.getElementById('password');
         const togglePasswordBtn = document.getElementById('togglePasswordBtn');
 
@@ -298,7 +306,19 @@
             });
         }
 
-        // --- Асинхронная подгрузка публичной цены ---
+        // --- АВТОМАТИЧЕСКИЙ ЗАПУСК ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ---
+        // Это гарантирует, что скрипт инициализируется даже если пользователь не кликает сразу
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                console.log('📄 DOM загружен, проверяем капчу...');
+                // Опционально: можно сразу рендерить капчу, если хотите, чтобы она была готова сразу.
+                // Но лучше рендерить по требованию (при клике на регистрацию), чтобы не грузить лишний JS.
+            });
+        } else {
+            console.log('📄 DOM уже готов');
+        }
+
+        // --- ПОДГРУЗКА ДАННЫХ (Цена, Реквизиты) ---
         fetch('/api/public/price')
             .then(res => res.json())
             .then(data => {
@@ -306,7 +326,6 @@
                 if (el && data.price) el.innerText = data.price.toLocaleString('ru-RU');
             }).catch(() => {});
 
-        // --- Асинхронная подгрузка реквизитов в футер ---
         fetch('/data/requisites.json')
             .then(res => res.json())
             .then(data => {
@@ -314,12 +333,11 @@
                 if (el) {
                     el.innerHTML = `
                         <p class="font-bold text-slate-800 text-base">${data.status} ${data.fio}</p>
-                        <p class="text-xs text-slate-500">ИНН: ${data.inn}</p>
+                        <p class="text-xs text-slate-500">ИНН: \${data.inn}</p>
                         <p class="text-xs text-slate-500">Email: ${data.email} | Тел: ${data.phone}</p>
                     `;
                 }
             }).catch(() => {
-                // Дефолтное значение на случай отсутствия файла конфигурации
                 const el = document.getElementById('footerRequisites');
                 if (el) {
                     el.innerHTML = `
