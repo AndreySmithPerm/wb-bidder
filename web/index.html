@@ -9,6 +9,16 @@
     
     <!-- Скрипт Яндекс SmartCaptcha -->
     <script src="https://captcha.yandex.ru/captcha.js?render=onload&onload=onYandexCaptchaLoad"></script>
+
+    <!-- 2. ВСТАВЛЯЕМ ГЛОБАЛЬНУЮ ФУНКЦИЮ СЮДА -->
+    <script>
+        window.onYandexCaptchaLoad = function() {
+            console.log('✅ Яндекс SmartCaptcha готов к работе.');
+            if (typeof initSmartCaptcha === 'function') {
+                initSmartCaptcha();
+            }
+        };
+    </script>
     
     <style>
       body { 
@@ -295,13 +305,6 @@
                 togglePasswordBtn.innerText = isPassword ? 'СКРЫТЬ' : 'ПОКАЗАТЬ';
             });
         }
-
-        // --- ЗАПУСК КАПЧИ ПРИ ПОЛНОЙ ЗАГРУЗКЕ СТРАНИЦЫ ---
-        window.addEventListener('load', () => {
-            console.log('📄 DOM и все ресурсы загружены. Инициализируем капчу...');
-            // Инициализируем капчу сразу при загрузке, чтобы она была готова к моменту клика на «Регистрация»
-            initSmartCaptcha();
-        });
 
         // --- ПОДГРУЗКА ДАННЫХ (Цена, Реквизиты) ---
         fetch('/api/public/price')
