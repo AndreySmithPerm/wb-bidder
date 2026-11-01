@@ -4,23 +4,45 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WB-Bidder — Профессиональный АРК-биддер для Wildberries</title>
+
     <!-- Подключаем Tailwind CSS -->
     <link rel="stylesheet" href="/css/tailwind.min.css">
-    
-    <!-- 1. Скрипт Яндекс SmartCaptcha -->
+
+    <!-- Скрипт Яндекс SmartCaptcha -->
     <script src="https://captcha.yandex.ru/captcha.js?render=onload&onload=onYandexCaptchaLoad"></script>
-    
-    <!-- 2. ГЛОБАЛЬНЫЙ КОЛБЭК (ВСТАВИТЬ ОБЯЗАТЕЛЬНО) -->
+
+    <!-- Глобальный колбэк: инициализация виджета сразу после загрузки скрипта Яндекса -->
     <script>
-        window.onYandexCaptchaLoad = function() {
-            console.log('✅ Яндекс Капча успешно загружена. window.smartCaptcha готов.');
-            // Запускаем вашу логику инициализации виджета
-            if (typeof initSmartCaptcha === 'function') {
-                initSmartCaptcha();
+      window.onYandexCaptchaLoad = function() {
+        console.log('✅ Яндекс Капча загружена, запускаем виджет...');
+
+        const container = document.getElementById('captchaTarget');
+        if (!container) {
+          console.error('❌ Контейнер #captchaTarget не найден');
+          return;
+        }
+
+        const sitekey = container.dataset.sitekey;
+        if (!sitekey) {
+          console.error('❌ Не указан data-sitekey в #captchaTarget. Вставьте sitekey из кабинета Яндекс Капчи.');
+          return;
+        }
+
+        initSmartCaptcha({
+          containerId: 'captchaTarget',
+          sitekey: sitekey,
+          callback: function(token) {
+            console.log('✅ Токен получен:', token.substring(0, 10) + '...');
+            const tokenInput = document.querySelector('input[name="captcha_token"]');
+            if (tokenInput) {
+              tokenInput.value = token;
             }
-        };
+          },
+          'nocache': true
+        });
+      };
     </script>
-    
+
     <style>
       body { 
         font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
@@ -88,6 +110,9 @@
           </h2>
 
           <form id="authForm" class="space-y-4">
+            <!-- Скрытый input для токена капчи (заполняется автоматически) -->
+            <input type="hidden" name="captcha_token" value="">
+
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">Email / Логин</label>
               <input type="email" id="email" required placeholder="example@yandex.ru" class="w-full px-4 py-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all">
@@ -108,7 +133,8 @@
             <!-- Блок Яндекс Капчи (скрыт по умолчанию классом hidden) -->
             <div id="captchaWrapper" class="hidden flex-col">
               <label class="block text-sm font-medium text-slate-700 mb-2">Подтверждение безопасности</label>
-              <div id="captchaTarget"></div>
+              <!-- sitekey нужно подставить на бэкенде (Go/Fiber) при генерации HTML -->
+              <div id="captchaTarget" data-sitekey="ВАШ_SITEKEY_ОТ_ЯНДЕКСА"></div>
             </div>
 
             <button type="submit" id="submitBtn" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition-all">Войти</button>
@@ -118,7 +144,6 @@
             </div>
           </form>
         </div>
-
       </div>
     </main>
 
@@ -134,207 +159,150 @@
         </div>
       </div>
     </footer>
+
     <!-- ССКРИПТЫ ЛОГИКИ ИНТЕРФЕЙСА -->
     <script>
-        const authForm = document.getElementById('authForm');
-        const authTitle = document.getElementById('authTitle');
-        const submitBtn = document.getElementById('submitBtn');
-        const toggleAuth = document.getElementById('toggleAuth');
-        const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
-        const captchaWrapper = document.getElementById('captchaWrapper');
-        const captchaTarget = document.getElementById('captchaTarget');
+      const authForm = document.getElementById('authForm');
+      const authTitle = document.getElementById('authTitle');
+      const submitBtn = document.getElementById('submitBtn');
+      const toggleAuth = document.getElementById('toggleAuth');
+      const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
+      const captchaWrapper = document.getElementById('captchaWrapper');
 
-        let isLogin = true;
-        let captchaRendered = false;
-        let cachedCaptchaSitekey = null;
+      let isLogin = true;
 
-        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
-        const registerSvg = loginSvg;
+      const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+      const registerSvg = loginSvg;
 
-        // --- ИНИЦИАЛИЗАЦИЯ КАПЧИ (вызывается только при событии load) ---
-        async function initSmartCaptcha() {
-            if (captchaRendered || !captchaTarget) return;
+      // --- Переключение Вход / Регистрация ---
+      if (toggleAuth) {
+        toggleAuth.addEventListener('click', () => {
+          isLogin = !isLogin;
 
-            if (typeof window.smartCaptcha === 'undefined') {
-                console.error('❌ Критическая ошибка: window.smartCaptcha не найден. Проверьте подключение скрипта Яндекс Капчи.');
-                return;
-            }
+          if (authTitle) authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
+          if (submitBtn) submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
+          if (toggleAuth) toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
+          if (forgotPasswordContainer) forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
 
-            if (!cachedCaptchaSitekey) {
-                try {
-                    const res = await fetch('/api/status');
-                    const data = await res.json();
-                    if (data && data.captcha_sitekey) {
-                        cachedCaptchaSitekey = data.captcha_sitekey;
-                    } else {
-                        console.error('❌ Сервер не вернул captcha_sitekey. Проверьте /api/status');
-                        return;
-                    }
-                } catch (err) {
-                    console.error('❌ Ошибка сети при получении ключа капчи:', err);
-                    return;
-                }
-            }
-
-            // ВАЖНО: Сначала делаем блок видимым, потом рендерим
+          // Показываем/скрываем капчу только визуально
+          if (!isLogin) {
             captchaWrapper.classList.remove('hidden');
             captchaWrapper.classList.add('flex', 'flex-col');
+          } else {
+            captchaWrapper.classList.add('hidden');
+            captchaWrapper.classList.remove('flex');
+          }
+        });
+      }
 
-            setTimeout(() => {
-                try {
-                    window.smartCaptcha.render('captchaTarget', {
-                        sitekey: cachedCaptchaSitekey,
-                        callback: function(token) {
-                            console.log('✅ Токен получен:', token.substring(0, 10) + '...');
-                        },
-                        'nocache': true
-                    });
-                    captchaRendered = true;
-                    console.log('🆗 Виджет успешно отрисован');
-                } catch (e) {
-                    console.error('❌ Ошибка рендера виджета:', e);
-                }
-            }, 50);
-        }
+      // --- Отправка формы ---
+      if (authForm) {
+        authForm.addEventListener('submit', async (e) => {
+          e.preventDefault();
 
-        // --- ПЕРЕКЛЮЧЕНИЕ ВХОД / РЕГИСТРАЦИЯ ---
-        if (toggleAuth) {
-            toggleAuth.addEventListener('click', () => {
-                isLogin = !isLogin;
+          const email = document.getElementById('email').value;
+          const password = document.getElementById('password').value;
+          const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
 
-                if (authTitle) authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
-                if (submitBtn) submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
-                if (toggleAuth) toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
-                if (forgotPasswordContainer) forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
+          let captchaToken = "";
 
-                if (!isLogin) {
-                    // Режим регистрации: показываем капчу
-                    if (captchaRendered) {
-                        captchaWrapper.classList.remove('hidden');
-                        captchaWrapper.classList.add('flex', 'flex-col');
-                    } else {
-                        // Если капча еще не рендерилась — пытаемся отрендерить (если Яндекс уже загружен)
-                        if (typeof window.smartCaptcha !== 'undefined') {
-                            initSmartCaptcha();
-                        } else {
-                            console.warn('⚠️ Скрипт Яндекс Капчи еще не загружен. Капча появится после полной загрузки страницы.');
-                        }
-                    }
-                } else {
-                    // Режим входа: скрываем капчу
-                    captchaWrapper.classList.add('hidden');
-                    captchaWrapper.classList.remove('flex');
-                }
+          // Если регистрация — проверяем токен
+          if (!isLogin) {
+            const tokenInput = document.querySelector('input[name="captcha_token"]');
+            captchaToken = tokenInput ? tokenInput.value : "";
+
+            if (!captchaToken) {
+              alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
+              return;
+            }
+          }
+
+          const payload = { email, password };
+          if (!isLogin) {
+            payload.captcha_token = captchaToken;
+          }
+
+          try {
+            const response = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
             });
-        }
 
-        // --- ОТПРАВКА ФОРМЫ ---
-        if (authForm) {
-            authForm.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const email = document.getElementById('email').value;
-                const password = document.getElementById('password').value;
-                const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
+            let data = {};
+            try { data = await response.json(); } catch(pErr) { data = { error: 'Некорректный ответ сервера' }; }
 
-                let captchaToken = "";
+            if (!response.ok) {
+              alert(data.error || 'Произошла ошибка при аутентификации');
+              if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
+              return;
+            }
 
-                if (!isLogin) {
-                    if (window.smartCaptcha) {
-                        captchaToken = window.smartCaptcha.getResponse();
-                    }
+            if (isLogin) {
+              localStorage.setItem('jwt_token', data.token);
+              window.location.href = '/dashboard.html';
+            } else {
+              alert('Регистрация успешно завершена! Теперь вы можете войти в свой аккаунт.');
+              isLogin = true;
+              if (authTitle) authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
+              if (submitBtn) submitBtn.innerText = 'Войти';
+              if (toggleAuth) toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
+              if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
 
-                    if (!captchaToken) {
-                        alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
-                        return;
-                    }
-                }
+              if (captchaWrapper) {
+                captchaWrapper.classList.add('hidden');
+                captchaWrapper.classList.remove('flex');
+              }
+              if (window.smartCaptcha) {
+                window.smartCaptcha.reset();
+              }
+            }
+          } catch (err) {
+            alert('Ошибка сети: не удалось связаться с сервером');
+          }
+        });
+      }
 
-                const payload = { email, password };
-                if (!isLogin) {
-                    payload.captcha_token = captchaToken;
-                }
+      // --- Логика пароля ---
+      const passwordInput = document.getElementById('password');
+      const togglePasswordBtn = document.getElementById('togglePasswordBtn');
 
-                try {
-                    const response = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
+      if (togglePasswordBtn && passwordInput) {
+        togglePasswordBtn.addEventListener('click', () => {
+          const isPassword = passwordInput.getAttribute('type') === 'password';
+          passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
+          togglePasswordBtn.innerText = isPassword ? 'СКРЫТЬ' : 'ПОКАЗАТЬ';
+        });
+      }
 
-                    let data = {};
-                    try { data = await response.json(); } catch(pErr) { data = { error: 'Некорректный ответ сервера' }; }
+      // --- Подгрузка данных (цена, реквизиты) ---
+      fetch('/api/public/price')
+        .then(res => res.json())
+        .then(data => {
+          const el = document.getElementById('landingPrice');
+          if (el && data.price) el.innerText = data.price.toLocaleString('ru-RU');
+        }).catch(() => {});
 
-                    if (!response.ok) {
-                        alert(data.error || 'Произошла ошибка при аутентификации');
-                        if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
-                        return;
-                    }
-
-                    if (isLogin) {
-                        localStorage.setItem('jwt_token', data.token);
-                        window.location.href = '/dashboard.html';
-                    } else {
-                        alert('Регистрация успешно завершена! Теперь вы можете войти в свой аккаунт.');
-                        isLogin = true;
-                        if (authTitle) authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
-                        if (submitBtn) submitBtn.innerText = 'Войти';
-                        if (toggleAuth) toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
-                        if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
-
-                        if (captchaWrapper) {
-                            captchaWrapper.classList.add('hidden');
-                            captchaWrapper.classList.remove('flex');
-                        }
-                        if (window.smartCaptcha) {
-                            window.smartCaptcha.reset();
-                        }
-                    }
-                } catch (err) {
-                    alert('Ошибка сети: не удалось связаться с сервером');
-                }
-            });
-        }
-
-        // --- ЛОГИКА ПАРОЛЯ ---
-        const passwordInput = document.getElementById('password');
-        const togglePasswordBtn = document.getElementById('togglePasswordBtn');
-
-        if (togglePasswordBtn && passwordInput) {
-            togglePasswordBtn.addEventListener('click', () => {
-                const isPassword = passwordInput.getAttribute('type') === 'password';
-                passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
-                togglePasswordBtn.innerText = isPassword ? 'СКРЫТЬ' : 'ПОКАЗАТЬ';
-            });
-        }
-
-        // --- ПОДГРУЗКА ДАННЫХ (Цена, Реквизиты) ---
-        fetch('/api/public/price')
-            .then(res => res.json())
-            .then(data => {
-                const el = document.getElementById('landingPrice');
-                if (el && data.price) el.innerText = data.price.toLocaleString('ru-RU');
-            }).catch(() => {});
-
-        fetch('/data/requisites.json')
-            .then(res => res.json())
-            .then(data => {
-                const el = document.getElementById('footerRequisites');
-                if (el) {
-                    el.innerHTML = `
-                        <p class="font-bold text-slate-800 text-base">${data.status} ${data.fio}</p>
-                        <p class="text-xs text-slate-500">ИНН: \${data.inn}</p>
-                        <p class="text-xs text-slate-500">Email: ${data.email} | Тел: ${data.phone}</p>
-                    `;
-                }
-            }).catch(() => {
-                const el = document.getElementById('footerRequisites');
-                if (el) {
-                    el.innerHTML = `
-                        <p class="font-bold text-slate-800 text-base">Самозанятый Кузнецов Андрей Владимирович</p>
-                        <p class="text-xs text-slate-400">Контакты обновляются</p>
-                    `;
-                }
-            });
+      fetch('/data/requisites.json')
+        .then(res => res.json())
+        .then(data => {
+          const el = document.getElementById('footerRequisites');
+          if (el) {
+            el.innerHTML = `
+                <p class="font-bold text-slate-800 text-base">${data.status} ${data.fio}</p>
+                <p class="text-xs text-slate-500">ИНН: ${data.inn}</p>
+                <p class="text-xs text-slate-500">Email: ${data.email} | Тел: ${data.phone}</p>
+            `;
+          }
+        }).catch(() => {
+          const el = document.getElementById('footerRequisites');
+          if (el) {
+            el.innerHTML = `
+                <p class="font-bold text-slate-800 text-base">Самозанятый Кузнецов Андрей Владимирович</p>
+                <p class="text-xs text-slate-400">Контакты обновляются</p>
+            `;
+          }
+        });
     </script>
   </body>
 </html>
