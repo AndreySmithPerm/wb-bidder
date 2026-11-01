@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="/css/tailwind.min.css">
     
     <!-- Подключаем скрипт через наш локальный безопасный прокси-роут Go -->
-    <script src="https://smartcaptcha.yandex.cloud/captcha.js" defer></script>
+    <script src="/api/captcha/script" async defer></script>
     
     <style>
       body { 
@@ -164,13 +164,13 @@
         const toggleAuth = document.getElementById('toggleAuth');
         const forgotPasswordBtn = document.getElementById('forgotPasswordBtn');
         const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
-        
+
         // Новые обертки для предотвращения багов с display: none
         const captchaWrapper = document.getElementById('captchaWrapper');
 
         let isLogin = true;
 
-        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
         const registerSvg = loginSvg;
 
         // Архитектурно верная инициализация капчи Яндекса
