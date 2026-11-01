@@ -6,8 +6,9 @@
     <title>WB-Bidder — Профессиональный АРК-биддер для Wildberries</title>
     <link rel="stylesheet" href="/css/tailwind.min.css">
     
-    <!-- Подключаем скрипт через наш локальный безопасный прокси-роут Go -->
-    <script src="/api/captcha/script" async defer></script>
+    <!-- ИСПРАВЛЕНИЕ 1: Прямой линк на скрипт Яндекса. 
+         Убрали /api/captcha/script, который вызывал 502 Bad Gateway. -->
+    <script src="https://smartcaptcha.yandex.cloud/captcha.js" async defer></script>
     
     <style>
       body { 
@@ -139,7 +140,8 @@
         </div>
       </section>
     </main>
-<!-- ПОДВАЛ (ФУТЕР) С ДИНАМИЧЕСКИМИ РЕКВИЗИТАМИ -->
+
+    <!-- ПОДВАЛ (ФУТЕР) С ДИНАМИЧЕСКИМИ РЕКВИЗИТАМИ -->
     <footer class="bg-slate-900 text-slate-400 text-sm py-12 px-6 border-t border-slate-800">
       <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
         <div id="footerRequisites" class="text-center md:text-left space-y-1">
@@ -156,47 +158,56 @@
       </div>
     </footer>
 
-<!-- Логика скриптов авторизации и реквизитов -->
+    <!-- Логика скриптов авторизации и реквизитов -->
     <script>
+        // --- КОНФИГУРАЦИЯ ---
+        // ⚠️ ВАЖНО: Вставьте сюда НОВЫЙ ключ из кабинета Яндекс.SmartCaptcha.
+        // Старый ключ, который был в вашем коде, скомпрометирован (опубликован в чате).
+        const CAPTCHA_SITEKEY = 'YOUR_YANDEX_SMARTCAPTCHA_SITEKEY'; 
+        
         const authForm = document.getElementById('authForm');
         const authTitle = document.getElementById('authTitle');
         const submitBtn = document.getElementById('submitBtn');
         const toggleAuth = document.getElementById('toggleAuth');
         const forgotPasswordBtn = document.getElementById('forgotPasswordBtn');
         const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
-
-        // Новые обертки для предотвращения багов с display: none
         const captchaWrapper = document.getElementById('captchaWrapper');
 
         let isLogin = true;
-
-        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
-        const registerSvg = loginSvg;
-
-        // Архитектурно верная инициализация капчи Яндекса
-        const CAPTCHA_SITEKEY = 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1';
         let captchaRendered = false;
 
+        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+        const registerSvg = loginSvg;
+
+        // Инициализация капчи
         window.initSmartCaptcha = function() {
             console.log('initSmartCaptcha called');
+            
+            // Если уже отрендерили - выходим
             if (captchaRendered) {
                 console.warn('Captcha already rendered, skipping');
                 return;
             }
-            if (!window.smartCaptcha) {
-                console.error('Yandex SmartCaptcha script not loaded');
+
+            // ГЛАВНАЯ ПРОВЕРКА: если объект smartCaptcha не появился, скрипт не загрузился
+            if (typeof window.smartCaptcha === 'undefined') {
+                console.error('ОШИБКА: Скрипт Яндекс.Капчи не загрузился! Проверьте консоль на ERR_NAME_NOT_RESOLVED или 502');
                 return;
             }
 
-            window.smartCaptcha.render('captchaTarget', {
-                sitekey: CAPTCHA_SITEKEY,
-                callback: function(token) {
-                    console.log('Captcha token received');
-                },
-                'nocache': true // Защита от кэширования виджета при повторных показах
-            });
-
-            captchaRendered = true;
+            try {
+                window.smartCaptcha.render('captchaTarget', {
+                    sitekey: CAPTCHA_SITEKEY,
+                    callback: function(token) {
+                        console.log('Captcha token received');
+                    },
+                    'nocache': true 
+                });
+                captchaRendered = true;
+                console.log('Капча успешно отрендерена');
+            } catch (e) {
+                console.error('Ошибка рендера капчи:', e);
+            }
         };
 
         // Запускаем строго один раз после полной готовности страницы
@@ -219,7 +230,7 @@
             .then(data => {
                 document.getElementById('footerRequisites').innerHTML = `
                     <p class="font-bold text-slate-800 text-base">${data.status} ${data.fio}</p>
-                    <p>ИНН: ${data.inn}</p>
+                    <p>ИНН: \${data.inn}</p>
                     <p>Email: ${data.email} | Тел: ${data.phone}</p>
                 `;
             }).catch(() => {
@@ -252,7 +263,11 @@
             
             let captchaToken = "";
             if (!isLogin) {
-                captchaToken = window.smartCaptcha ? window.smartCaptcha.getResponse() : "";
+                // Получаем токен только если капча видна и объект существует
+                if (window.smartCaptcha) {
+                    captchaToken = window.smartCaptcha.getResponse();
+                }
+                
                 if (!captchaToken) {
                     alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
                     return;
@@ -291,7 +306,6 @@
                     toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
                     if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
                     
-                    // Безопасное скрытие без повреждения внутренней разметки API Яндекса
                     if (captchaWrapper) {
                         captchaWrapper.style.display = 'none';
                     }
