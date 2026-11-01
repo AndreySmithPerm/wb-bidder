@@ -124,11 +124,7 @@
       </div>
     </footer>
     <!-- ССКРИПТЫ ЛОГИКИ ИНТЕРФЕЙСА -->
-        <script>
-        // --- КОНФИГУРАЦИЯ ---
-        // ВАЖНО: Если у вас нет /api/status, раскомментируйте строку ниже и вставьте свой sitekey вручную для теста
-        // const FORCE_SITEKEY = 'ВАШ_PUBLIC_SITEKEY_ОТ_ЯНДЕКСА'; 
-        
+    <script>
         const authForm = document.getElementById('authForm');
         const authTitle = document.getElementById('authTitle');
         const submitBtn = document.getElementById('submitBtn');
@@ -138,28 +134,22 @@
         const captchaTarget = document.getElementById('captchaTarget');
 
         let isLogin = true;
-        let captchaRendered = false; 
+        let captchaRendered = false;
         let cachedCaptchaSitekey = null;
 
         const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
         const registerSvg = loginSvg;
 
-        // --- ИНИЦИАЛИЗАЦИЯ КАПЧИ ---
-        window.initSmartCaptcha = async function() {
-            if (captchaRendered) return;
-            if (!captchaTarget) return;
+        // --- ИНИЦИАЛИЗАЦИЯ КАПЧИ (вызывается только при событии load) ---
+        async function initSmartCaptcha() {
+            if (captchaRendered || !captchaTarget) return;
 
-            // 1. Проверка загрузки скрипта Яндекса
             if (typeof window.smartCaptcha === 'undefined') {
-                console.warn('🔄 Скрипт Яндекс Капчи еще не загружен, повтор через 300мс...');
-                setTimeout(window.initSmartCaptcha, 300);
+                console.error('❌ Критическая ошибка: window.smartCaptcha не найден. Проверьте подключение скрипта Яндекс Капчи.');
                 return;
             }
 
-            // 2. Получение ключа (с приоритетом ручного ключа для тестов)
             if (!cachedCaptchaSitekey) {
-                // if (FORCE_SITEKEY) { cachedCaptchaSitekey = FORCE_SITEKEY; } // Раскомментировать для теста без бэкенда
-                
                 try {
                     const res = await fetch('/api/status');
                     const data = await res.json();
@@ -175,12 +165,10 @@
                 }
             }
 
-            // 3. КРИТИЧЕСКИ ВАЖНО: Сначала делаем блок видимым, потом рендерим
-            // Виджет Яндекса не умеет рендериться в элементе с display:none
+            // ВАЖНО: Сначала делаем блок видимым, потом рендерим
             captchaWrapper.classList.remove('hidden');
             captchaWrapper.classList.add('flex', 'flex-col');
-            
-            // Небольшая задержка, чтобы браузер успел отрисовать блок перед рендером виджета
+
             setTimeout(() => {
                 try {
                     window.smartCaptcha.render('captchaTarget', {
@@ -188,7 +176,7 @@
                         callback: function(token) {
                             console.log('✅ Токен получен:', token.substring(0, 10) + '...');
                         },
-                        'nocache': true 
+                        'nocache': true
                     });
                     captchaRendered = true;
                     console.log('🆗 Виджет успешно отрисован');
@@ -196,28 +184,30 @@
                     console.error('❌ Ошибка рендера виджета:', e);
                 }
             }, 50);
-        };
+        }
 
         // --- ПЕРЕКЛЮЧЕНИЕ ВХОД / РЕГИСТРАЦИЯ ---
         if (toggleAuth) {
-            toggleAuth.addEventListener('click', async () => {
+            toggleAuth.addEventListener('click', () => {
                 isLogin = !isLogin;
-                
-                // Обновляем UI
+
                 if (authTitle) authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
                 if (submitBtn) submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
                 if (toggleAuth) toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
                 if (forgotPasswordContainer) forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
 
-                // Логика капчи
                 if (!isLogin) {
-                    // Режим регистрации: показываем капчу и рендерим, если еще не рендерили
-                    if (!captchaRendered) {
-                        await window.initSmartCaptcha();
-                    } else {
-                        // Если уже рендерили, просто убеждаемся, что блок видим
+                    // Режим регистрации: показываем капчу
+                    if (captchaRendered) {
                         captchaWrapper.classList.remove('hidden');
                         captchaWrapper.classList.add('flex', 'flex-col');
+                    } else {
+                        // Если капча еще не рендерилась — пытаемся отрендерить (если Яндекс уже загружен)
+                        if (typeof window.smartCaptcha !== 'undefined') {
+                            initSmartCaptcha();
+                        } else {
+                            console.warn('⚠️ Скрипт Яндекс Капчи еще не загружен. Капча появится после полной загрузки страницы.');
+                        }
                     }
                 } else {
                     // Режим входа: скрываем капчу
@@ -234,14 +224,14 @@
                 const email = document.getElementById('email').value;
                 const password = document.getElementById('password').value;
                 const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-                
+
                 let captchaToken = "";
-                
+
                 if (!isLogin) {
                     if (window.smartCaptcha) {
                         captchaToken = window.smartCaptcha.getResponse();
                     }
-                    
+
                     if (!captchaToken) {
                         alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
                         return;
@@ -252,21 +242,21 @@
                 if (!isLogin) {
                     payload.captcha_token = captchaToken;
                 }
-                
+
                 try {
                     const response = await fetch(endpoint, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
-                    
+
                     let data = {};
                     try { data = await response.json(); } catch(pErr) { data = { error: 'Некорректный ответ сервера' }; }
-                    
-                    if (!response.ok) { 
+
+                    if (!response.ok) {
                         alert(data.error || 'Произошла ошибка при аутентификации');
                         if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
-                        return; 
+                        return;
                     }
 
                     if (isLogin) {
@@ -279,7 +269,7 @@
                         if (submitBtn) submitBtn.innerText = 'Войти';
                         if (toggleAuth) toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
                         if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
-                        
+
                         if (captchaWrapper) {
                             captchaWrapper.classList.add('hidden');
                             captchaWrapper.classList.remove('flex');
@@ -288,8 +278,8 @@
                             window.smartCaptcha.reset();
                         }
                     }
-                } catch (err) { 
-                    alert('Ошибка сети: не удалось связаться с сервером'); 
+                } catch (err) {
+                    alert('Ошибка сети: не удалось связаться с сервером');
                 }
             });
         }
@@ -306,17 +296,12 @@
             });
         }
 
-        // --- АВТОМАТИЧЕСКИЙ ЗАПУСК ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ---
-        // Это гарантирует, что скрипт инициализируется даже если пользователь не кликает сразу
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => {
-                console.log('📄 DOM загружен, проверяем капчу...');
-                // Опционально: можно сразу рендерить капчу, если хотите, чтобы она была готова сразу.
-                // Но лучше рендерить по требованию (при клике на регистрацию), чтобы не грузить лишний JS.
-            });
-        } else {
-            console.log('📄 DOM уже готов');
-        }
+        // --- ЗАПУСК КАПЧИ ПРИ ПОЛНОЙ ЗАГРУЗКЕ СТРАНИЦЫ ---
+        window.addEventListener('load', () => {
+            console.log('📄 DOM и все ресурсы загружены. Инициализируем капчу...');
+            // Инициализируем капчу сразу при загрузке, чтобы она была готова к моменту клика на «Регистрация»
+            initSmartCaptcha();
+        });
 
         // --- ПОДГРУЗКА ДАННЫХ (Цена, Реквизиты) ---
         fetch('/api/public/price')
