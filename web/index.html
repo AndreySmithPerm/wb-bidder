@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="/css/tailwind.min.css">
     
     <!-- Подключаем скрипт через наш локальный безопасный прокси-роут Go -->
-    <script src="https://captcha.yandex.ru/captcha.js?render=onload&onload=initSmartCaptcha"></script>
+    <script src="https://smartcaptcha.yandex.cloud/captcha.js" defer></script>
     
     <style>
       body { 
@@ -102,9 +102,9 @@
               </button>
             </div>
 
-            <!-- Контейнер для гарантированного отображения видимой капчи -->
-            <div id="captchaContainer" style="display: none;" class="mb-4 flex justify-center">
-                <div id="captcha-container" class="smart-captcha"></div>
+            <!-- Контейнер для капчи: всегда существует, видимость управляем отдельно через обертку -->
+            <div id="captchaWrapper" class="mb-4 flex justify-center" style="display: none;">
+                <div id="captchaTarget" class="smart-captcha"></div>
             </div>
 
             <button type="submit" id="submitBtn" 
@@ -156,7 +156,7 @@
       </div>
     </footer>
 
-    <!-- Логика скриптов авторизации и реквизитов -->
+<!-- Логика скриптов авторизации и реквизитов -->
     <script>
         const authForm = document.getElementById('authForm');
         const authTitle = document.getElementById('authTitle');
@@ -164,34 +164,42 @@
         const toggleAuth = document.getElementById('toggleAuth');
         const forgotPasswordBtn = document.getElementById('forgotPasswordBtn');
         const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
-        const captchaContainer = document.getElementById('captchaContainer');
+        
+        // Новые обертки для предотвращения багов с display: none
+        const captchaWrapper = document.getElementById('captchaWrapper');
+
         let isLogin = true;
 
         const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
-        const registerSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+        const registerSvg = loginSvg;
 
-        // Глобальный триггер инициализации
+        // Архитектурно верная инициализация капчи Яндекса
+        const CAPTCHA_SITEKEY = 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1';
+        let captchaRendered = false;
+
         window.initSmartCaptcha = function() {
-            console.log("Модуль Яндекс СмартКапчи успешно привязан к контексту страницы");
-            if (window.smartCaptcha) {
-                window.smartCaptcha.render('captcha-container', {
-                    // Ваш настоящий боевой ключ клиента для wb-bidder.ru
-                    sitekey: 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1',
-                    callback: function(token) {
-                        console.log("Токен капчи успешно получен селлером");
-                    }
-                });
+            console.log('initSmartCaptcha called');
+            if (captchaRendered) {
+                console.warn('Captcha already rendered, skipping');
+                return;
             }
+            if (!window.smartCaptcha) {
+                console.error('Yandex SmartCaptcha script not loaded');
+                return;
+            }
+
+            window.smartCaptcha.render('captchaTarget', {
+                sitekey: CAPTCHA_SITEKEY,
+                callback: function(token) {
+                    console.log('Captcha token received');
+                },
+                'nocache': true // Защита от кэширования виджета при повторных показах
+            });
+
+            captchaRendered = true;
         };
 
-        // Запускаем рендеринг принудительно, как только страница готова
-        if (document.readyState === 'complete') {
-            window.initSmartCaptcha();
-        } else {
-            window.addEventListener('load', window.initSmartCaptcha);
-        }
-
-        // Железный триггер: принудительно запускаем рендеринг капчи, как только страница готова
+        // Запускаем строго один раз после полной готовности страницы
         if (document.readyState === 'complete') {
             window.initSmartCaptcha();
         } else {
@@ -205,7 +213,7 @@
                 if(data.price) document.getElementById('landingPrice').innerText = data.price.toLocaleString('ru-RU');
             }).catch(() => {});
 
-        // Динамическая подгрузка реквизитов в футер из отдельного файла
+        // Динамическая подгрузка реквизитов в футер
         fetch('/data/requisites.json')
             .then(res => res.json())
             .then(data => {
@@ -218,6 +226,7 @@
                 document.getElementById('footerRequisites').innerHTML = `<p class="font-bold text-slate-800">Самозанятый Кузнецов Андрей Владимирович</p><p>Контакты обновляются</p>`;
             });
 
+        // --- Логика переключения Вход/Регистрация ---
         toggleAuth.addEventListener('click', () => {
             isLogin = !isLogin;
             authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
@@ -228,10 +237,9 @@
                 forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
             }
 
-            // Просто включаем или выключаем видимость блока, где капча уже создана Яндексом автоматически!
-            const container = document.getElementById('captchaContainer');
-            if (container) {
-                container.style.display = isLogin ? 'none' : 'block';
+            // Мягко управляем видимостью обертки без разрушения iframe капчи
+            if (captchaWrapper) {
+                captchaWrapper.style.display = isLogin ? 'none' : 'flex';
             }
         });
 
@@ -241,7 +249,7 @@
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-            // Если включен режим регистрации — извлекаем проверочный токен SmartCaptcha
+            
             let captchaToken = "";
             if (!isLogin) {
                 captchaToken = window.smartCaptcha ? window.smartCaptcha.getResponse() : "";
@@ -253,7 +261,7 @@
 
             const payload = { email, password };
             if (!isLogin) {
-                payload.captcha_token = captchaToken; // Передаем токен для бэкенда Go
+                payload.captcha_token = captchaToken;
             }
             
             try {
@@ -268,7 +276,6 @@
                 
                 if (!response.ok) { 
                     alert(data.error || 'Ошибка авторизации'); 
-                    // Сбрасываем виджет капчи при ошибке, чтобы роботы не могли использовать токен повторно
                     if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
                     return; 
                 }
@@ -284,11 +291,12 @@
                     toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
                     if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
                     
-                    // Исправлено: безопасное скрытие контейнера без падения скрипта
-                    const endContainer = document.getElementById('captchaContainer');
-                    if (endContainer) {
-                        endContainer.style.display = 'none';
-                        endContainer.innerHTML = '';
+                    // Безопасное скрытие без повреждения внутренней разметки API Яндекса
+                    if (captchaWrapper) {
+                        captchaWrapper.style.display = 'none';
+                    }
+                    if (window.smartCaptcha) {
+                        window.smartCaptcha.reset();
                     }
                 }
             } catch (err) { 
