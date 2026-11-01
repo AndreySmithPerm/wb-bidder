@@ -65,17 +65,22 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for camp := range campaignChan {
+				// Создаем изолированную копию структуры для каждого воркера
 				localCamp := camp
 
 				log.Printf("[Воркер %d] Кампания %d: проверка ключевой фразы '%s'", workerID, localCamp.ID, localCamp.Strategy.Keyword)
 
+				// Базовый таймаут на операцию
 				workerCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 
 				// Шаг А: Парсим реальный рекламный аукцион
 				realBids, err := wbCli.GetAuctionBids(workerCtx, localCamp.Strategy.Keyword)
 				if err != nil {
 					log.Printf("[Воркер %d] Ошибка парсинга аукциона для %d: %v", workerID, localCamp.ID, err)
-					_ = logRepo.SaveLog(ctx, localCamp.ID, localCamp.CurrentBid, localCamp.CurrentBid, []int{}, "Ошибка парсинга аукциона")
+					// Используем context.Background() ограниченный по времени, так как основной ctx может быть уже отменен
+					saveCtx, saveCancel := context.WithTimeout(context.Background(), 3*time.Second)
+					_ = logRepo.SaveLog(saveCtx, localCamp.ID, localCamp.CurrentBid, localCamp.CurrentBid, []int{}, "Ошибка парсинга аукциона")
+					saveCancel()
 					cancel()
 					continue
 				}
@@ -86,16 +91,19 @@ func main() {
 				err = engine.CalculateAndApplyARC(workerCtx, &localCamp, realBids)
 
 				statusMsg := "Ставка оптимальна"
+				saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+
 				if err != nil {
 					statusMsg = "Ошибка API WB: " + err.Error()
 					log.Printf("[Воркер %d] Ошибка применения ставки для %d: %v", workerID, localCamp.ID, err)
 				} else if oldBid != localCamp.CurrentBid {
 					statusMsg = "Ставка успешно изменена"
-					_ = campRepo.UpdateCampaignBid(ctx, localCamp.ID, localCamp.CurrentBid)
+					_ = campRepo.UpdateCampaignBid(saveCtx, localCamp.ID, localCamp.CurrentBid)
 				}
 
 				// Шаг В: Сохраняем результат в историю логов
-				_ = logRepo.SaveLog(ctx, localCamp.ID, oldBid, localCamp.CurrentBid, realBids, statusMsg)
+				_ = logRepo.SaveLog(saveCtx, localCamp.ID, oldBid, localCamp.CurrentBid, realBids, statusMsg)
+				saveCancel()
 				cancel()
 			}
 		}(w)
@@ -109,9 +117,8 @@ func main() {
 	apiHandler := apiHttp.NewHandler(dbPool)
 	app.Static("/", "./web")
 
-	// Локальный прокси-маршрут для обхода блокировок DNS имени хоста Яндекса
+	// Маршруты API
 	app.Get("/api/captcha/script", apiHandler.ProxyYandexCaptcha)
-
 	app.Get("/api/public/price", apiHandler.GetPublicPrice)
 	app.Get("/api/status", apiHandler.GetStatus)
 	app.Post("/api/auth/register", apiHandler.Register)
@@ -126,16 +133,13 @@ func main() {
 
 	go func() {
 		log.Println("Запуск Web-API сервера на порту :8080")
-		if err := app.Listen(":8080"); err != nil && err != context.Canceled {
-			log.Printf("Уведомление веб-сервера: %v", err)
+		if err := app.Listen(":8080"); err != nil {
+			log.Printf("Уведомление веб-сервера (остановка): %v", err)
 		}
 	}()
 	// --- КОНЕЦ БЛОКА FIBER ---
 
-	// 5. Потоковый цикл опроса базы данных
-	ticker := time.NewTicker(2 * time.Minute)
-	defer ticker.Stop()
-
+	// Первичный запуск опроса при старте приложения
 	if activeCampaigns, err := campRepo.GetActiveCampaigns(ctx); err == nil {
 		for _, c := range activeCampaigns {
 			select {
@@ -145,6 +149,10 @@ func main() {
 			}
 		}
 	}
+
+	// 5. Потоковый цикл опроса базы данных
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -167,12 +175,19 @@ func main() {
 
 		case <-ctx.Done():
 			log.Println("Получен сигнал остановки. Инициируется Graceful Shutdown...")
-			if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
+
+			// 1. Первым делом закрываем веб-сервер, чтобы не принимать новые запросы
+			if err := app.ShutdownWithTimeout(5 * time.Second); err != nil {
 				log.Printf("Ошибка при принудительной остановке Fiber: %v", err)
 			}
+
+			// 2. Закрываем канал, чтобы воркеры доработали текущие задачи и вышли из цикла range
 			close(campaignChan)
+
+			// 3. Ожидаем завершения всех запущенных горутин-воркеров
 			wg.Wait()
-			log.Println("Сервис биддинга полностью остановлен.")
+
+			log.Println("Сервис биддинга полностью успешно остановлен.")
 			return
 		}
 	}
