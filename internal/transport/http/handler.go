@@ -94,7 +94,7 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 
 	captchaSecretKey := os.Getenv("CAPTCHA_SECRETKEY")
 	if captchaSecretKey == "" {
-		log.Printf("[КРИТИЧЕСКАЯ ОШИБКА CONFIG] Переменная CAPTCHA_SECRETKEY не задана в файле .env")
+		log.Printf("[КРИТИЧЕСКАЯ ОШИБКА CONFIG] Переменная CAPTCHA_SECRETKEY не задана в системе")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка конфигурации сервера безопасности"})
 	}
 
@@ -104,7 +104,6 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 	payload := map[string]string{
 		"secret": captchaSecretKey,
 		"token":  dto.CaptchaToken,
-		// "ip": c.IP(), // можно добавить IP пользователя, если нужно
 	}
 
 	jsonData, err := json.Marshal(payload)
