@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WB-Bidder — Профессиональный АРК-биддер для Wildberries</title>
     <link rel="stylesheet" href="/css/tailwind.min.css">
-    
-    <!-- Официальное стабильное подключение Яндекс Капчи с onload-колбэком -->
-    <script src="https://smartcaptcha.yandex.cloud/captcha.js" defer></script>
-    
+
+    <!-- Официальное стабильное подключение Яндекс Капчи:
+         onload-колбэк + автопоиск контейнеров smart-captcha (render=onload) -->
+    <script src="https://smartcaptcha.cloud.yandex.ru/captcha.js?onload=onloadSmartCaptcha&render=onload" defer></script>
+
     <style>
       body { 
         font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
@@ -102,9 +103,9 @@
               </button>
             </div>
 
-            <!-- Контейнер для гарантированного отображения видимой капчи -->
-            <div id="captchaContainer" style="display: none;" class="mb-4 flex justify-center">
-              <div id="yandex-captcha-box" class="smart-captcha"></div>
+            <!-- Контейнер капчи: видна сразу при загрузке страницы, sitekey подставляет сервер -->
+            <div id="captchaContainer" class="mb-4 flex justify-center">
+              <div id="yandex-captcha-box" class="smart-captcha" data-sitekey="__SMARTCAPTCHA_SITEKEY__"></div>
             </div>
 
             <button type="submit" id="submitBtn" 
@@ -139,7 +140,8 @@
         </div>
       </section>
     </main>
-<!-- ПОДВАЛ (ФУТЕР) С ДИНАМИЧЕСКИМИ РЕКВИЗИТАМИ -->
+
+    <!-- ПОДВАЛ (ФУТЕР) С ДИНАМИЧЕСКИМИ РЕКВИЗИТАМИ -->
     <footer class="bg-slate-900 text-slate-400 text-sm py-12 px-6 border-t border-slate-800">
       <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
         <div id="footerRequisites" class="text-center md:text-left space-y-1">
@@ -164,14 +166,14 @@
         const toggleAuth = document.getElementById('toggleAuth');
         const forgotPasswordBtn = document.getElementById('forgotPasswordBtn');
         const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
-        const captchaContainer = document.getElementById('captchaContainer');
+        const captchaBox = document.getElementById('yandex-captcha-box');
         let isLogin = true;
 
         const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
         const registerSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
 
-        // Глобальный триггер инициализации, вызываемый Яндексом при загрузке страницы
-        window.initSmartCaptcha = function() {
+        // Колбэк, который Яндекс вызывает после загрузки captcha.js (render=onload сам отрисует виджет в data-sitekey контейнере)
+        window.onloadSmartCaptcha = function() {
             console.log("Модуль Яндекс СмартКапчи успешно привязан к контексту страницы");
         };
 
@@ -204,31 +206,6 @@
             if (forgotPasswordContainer) {
                 forgotPasswordContainer.style.display = isLogin ? 'block' : 'none';
             }
-
-            const container = document.getElementById('captchaContainer');
-            if (container) {
-                if (!isLogin) {
-                    container.style.display = 'block';
-                    // Очищаем контейнер и создаем чистый блок для рендеринга капчи
-                    container.innerHTML = '<div id="yandex-captcha-box" class="smart-captcha"></div>';
-                    
-                    // Передаем ваш новый боевой ключ напрямую в API Яндекса
-                    setTimeout(() => {
-                        if (window.smartCaptcha) {
-                            window.smartCaptcha.render('yandex-captcha-box', {
-                                // === ВНИМАНИЕ: ВСТАВЬТЕ СЮДА ВАШ КЛЮЧ ИЗ КОНСОЛИ ЯНДЕКСА (вместо ysc1_...) ===
-                                sitekey: 'ysc1_EK2xUuhb8FIKjqSwfHeiIfNc392xWf5vtxlutU6747e904d1',
-                                callback: function(token) {
-                                    console.log("Токен капчи успешно получен селлером");
-                                }
-                            });
-                        }
-                    }, 50);
-                } else {
-                    container.style.display = 'none';
-                    container.innerHTML = '';
-                }
-            }
         });
 
         // Логика отправки формы авторизации и регистрации с проверкой SmartCaptcha
@@ -237,20 +214,18 @@
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-            // Если включен режим регистрации — извлекаем проверочный токен SmartCaptcha
+
+            // Извлекаем проверочный токен SmartCaptcha (капча видна всегда)
             let captchaToken = "";
-            if (!isLogin) {
-                captchaToken = window.smartCaptcha ? window.smartCaptcha.getResponse() : "";
-                if (!captchaToken) {
-                    alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
-                    return;
-                }
+            if (window.smartCaptcha && captchaBox) {
+                captchaToken = window.smartCaptcha.getResponse(captchaBox);
+            }
+            if (!captchaToken) {
+                alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
+                return;
             }
 
-            const payload = { email, password };
-            if (!isLogin) {
-                payload.captcha_token = captchaToken; // Передаем токен для бэкенда Go
-            }
+            const payload = { email, password, captcha_token: captchaToken };
             
             try {
                 const response = await fetch(endpoint, {
@@ -265,7 +240,7 @@
                 if (!response.ok) { 
                     alert(data.error || 'Ошибка авторизации'); 
                     // Сбрасываем виджет капчи при ошибке, чтобы роботы не могли использовать токен повторно
-                    if (!isLogin && window.smartCaptcha) window.smartCaptcha.reset();
+                    if (window.smartCaptcha && captchaBox) window.smartCaptcha.reset(captchaBox);
                     return; 
                 }
 
@@ -280,12 +255,8 @@
                     toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
                     if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
                     
-                    // Исправлено: безопасное скрытие контейнера без падения скрипта
-                    const endContainer = document.getElementById('captchaContainer');
-                    if (endContainer) {
-                        endContainer.style.display = 'none';
-                        endContainer.innerHTML = '';
-                    }
+                    // Токен одноразовый: после успешной регистрации обновляем капчу для следующего входа
+                    if (window.smartCaptcha && captchaBox) window.smartCaptcha.reset(captchaBox);
                 }
             } catch (err) { 
                 alert('Ошибка сети: не удалось связаться с Go-сервером'); 
