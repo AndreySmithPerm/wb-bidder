@@ -45,12 +45,18 @@ func (h *Handler) ProxyYandexCaptcha(c *fiber.Ctx) error {
 	return c.SendStream(resp.Body)
 }
 
-// GetStatus возвращает статус работоспособности бэкенда и публичный sitekey капчи из .env
+// GetStatus возвращает статус работоспособности бэкенда и публичный sitekey капчи
 func (h *Handler) GetStatus(c *fiber.Ctx) error {
+	// Железобетонная проверка всех возможных вариантов названий переменных в Docker
 	captchaSitekey := os.Getenv("CAPTCHA_SITEKEY")
 	if captchaSitekey == "" {
 		captchaSitekey = os.Getenv("SMARTCAPTCHA_SITEKEY")
 	}
+	if captchaSitekey == "" {
+		captchaSitekey = os.Getenv("CAPTCHA_SITE_KEY") // На случай опечатки с подчеркиванием
+	}
+
+	log.Printf("[API STATUS] Запрос sitekey фронтендом. Отдаем ключ: %s", captchaSitekey)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":          "running",
