@@ -31,7 +31,7 @@ func NewHandler(pool *pgxpool.Pool) *Handler {
 // ProxyYandexCaptcha скачивает скрипт напрямую у Яндекса и отдает его от вашего домена
 func (h *Handler) ProxyYandexCaptcha(c *fiber.Ctx) error {
 	// Исправлено: Боевой стабильный URL скрипта Яндекс СмартКапчи
-	cleanURL := "https://yandex.ru"
+	cleanURL := "https://smartcaptcha.cloud.yandex.ru/captcha.js"
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(cleanURL)
@@ -80,7 +80,7 @@ func (h *Handler) validateCaptcha(ctx context.Context, token, userIP string) (bo
 	}
 
 	// Исправлено: Боевой шлюз верификации токенов Яндекса
-	validateURL := "https://yandex.ru"
+	validateURL := "https://smartcaptcha.cloud.yandex.ru/validate"
 
 	formData := url.Values{}
 	formData.Set("secret", captchaSecretKey)
