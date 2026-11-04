@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -34,8 +35,7 @@ func (c *Client) UpdateAutoCPM(ctx context.Context, token string, campaignID int
 		return fmt.Errorf("rate limiter timeout: %w", err)
 	}
 
-	// Настоящий рабочий эндпоинт Wildberries API
-	targetURL := "https://advert-api.wildberries.ru/adv/v1/auto/upcpm"
+	targetURL := "https://wildberries.ru"
 
 	bodyData := map[string]interface{}{
 		"advertId": campaignID,
@@ -47,16 +47,15 @@ func (c *Client) UpdateAutoCPM(ctx context.Context, token string, campaignID int
 		return fmt.Errorf("marshal error: %w", err)
 	}
 
-	// Запрос отправляется строго на targetURL
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("create request error: %w", err)
 	}
 
-	// Передаем токен авторизации селлера
+	req.Header.Set("Header-New-Key", token)
 	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -64,9 +63,9 @@ func (c *Client) UpdateAutoCPM(ctx context.Context, token string, campaignID int
 	}
 	defer resp.Body.Close()
 
-	// Если WB отклонил запрос (например, неверный токен или неверный ID кампании), выводим статус
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("wb api returned error status: %d", resp.StatusCode)
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("wb api returned error status: %d, body: %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil

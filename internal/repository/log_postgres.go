@@ -16,7 +16,8 @@ func NewLogRepository(pool *pgxpool.Pool) *LogRepository {
 }
 
 // SaveLog записывает результат проверки ставки в таблицу bid_logs
-func (r *LogRepository) SaveLog(ctx context.Context, campaignID int64, oldBid, newBid int, marketBids []int, msg string) error {
+// ИСПРАВЛЕНО: тип marketBids изменен на []int32 для полной совместимости с типом INT[] в PostgreSQL и pgx/v5
+func (r *LogRepository) SaveLog(ctx context.Context, campaignID int64, oldBid, newBid int, marketBids []int32, msg string) error {
 	query := `
 		INSERT INTO bid_logs (campaign_id, old_bid, new_bid, market_bids, status_message) 
 		VALUES ($1, $2, $3, $4, $5)`

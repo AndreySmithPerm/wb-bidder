@@ -23,10 +23,9 @@ func NewBidderEngine(client WBClient) *BidderEngine {
 func (e *BidderEngine) CalculateAndApplyARC(ctx context.Context, campaign *model.Campaign, competitorsBids []int) error {
 	strat := campaign.Strategy
 
-	// Внедряем ночное сбережение бюджета селлера
+	// === СОХРАНЕНО И ОПТИМИЗИРОВАНО: Ночное сбережение бюджета селлера ===
 	loc, err := time.LoadLocation("Europe/Moscow")
 	if err != nil {
-		// Безопасный дефолт (MSK UTC+3), если на сервере нет базы tzdata
 		loc = time.FixedZone("MSK", 3*60*60)
 	}
 
@@ -36,13 +35,11 @@ func (e *BidderEngine) CalculateAndApplyARC(ctx context.Context, campaign *model
 	if currentHour >= 1 && currentHour < 6 {
 		log.Printf("[НОЧНАЯ ЗАЩИТА] Аккаунт кампании %d: трафик минимален. Выставляем минимальную ставку MinBid (%d руб.).", campaign.ID, strat.MinBid)
 
-		// Сразу проверяем: если текущая ставка уже равна минимальной, то слать лишний запрос в WB API не нужно
 		if campaign.CurrentBid == strat.MinBid {
 			log.Printf("[НОЧНАЯ ЗАЩИТА] Кампания %d: минимальная ставка %d руб. уже установлена и оптимальна.", campaign.ID, campaign.CurrentBid)
 			return nil
 		}
 
-		// Моментально применяем минимальную ставку через ваш родной вспомогательный метод
 		return e.applyNewBid(ctx, campaign, strat.MinBid)
 	}
 
@@ -54,21 +51,21 @@ func (e *BidderEngine) CalculateAndApplyARC(ctx context.Context, campaign *model
 	}
 
 	// 2. Корректируем целевое место под реальный размер аукциона
-	maxAvailablePlace := strat.TargetPlace
-	if maxAvailablePlace > len(competitorsBids) {
-		maxAvailablePlace = len(competitorsBids)
+	targetPlace := strat.TargetPlace
+	if targetPlace <= 0 {
+		targetPlace = 1
+	}
+	if targetPlace > len(competitorsBids) {
+		targetPlace = len(competitorsBids)
 	}
 
-	// 3. ПРАВИЛЬНЫЙ АЛГОРИТМ АРК:
-	maxCompetitorBid := 0
-	for i := 0; i < maxAvailablePlace; i++ {
-		if competitorsBids[i] > maxCompetitorBid {
-			maxCompetitorBid = competitorsBids[i]
-		}
-	}
+	// 3. ИСПРАВЛЕННЫЙ АЛГОРИТМ АРК: Перебиваем ставку именно целевого места на 1 рубль
+	// Массивы в Go начинаются с 0, поэтому 3-е место — это индекс 2
+	targetCompetitorBid := competitorsBids[targetPlace-1]
+	calculatedBid := targetCompetitorBid + 1
 
-	// Шаг ставки в АРК составляет 1 рубль.
-	calculatedBid := maxCompetitorBid + 1
+	log.Printf("[АРК] Кампания %d: Для удержания места %d (ставка конкурента %d руб.) рассчитан CPM %d руб.",
+		campaign.ID, targetPlace, targetCompetitorBid, calculatedBid)
 
 	// 4. Ограничиваем ставку рамками бюджета селлера
 	if calculatedBid > strat.MaxBid {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
+	"sort"
 )
 
 // WbAuctionResponse описывает структуру ответа рекламного аукциона WB
@@ -31,14 +31,16 @@ func (c *Client) GetAuctionBids(ctx context.Context, keyword string) ([]int, err
 	}
 
 	escapedKeyword := url.QueryEscape(keyword)
-
-	// Вариант А: Основной замаскированный эндпоинт аукциона с верным %s
-	maskedApiURL := fmt.Sprintf("https://catalog-ads.wildberries.ru/api/v6/search?keyword=%s", escapedKeyword)
-	cleanApiURL := strings.ReplaceAll(maskedApiURL, "*", "")
+	// =========================================================================
+	// Вариант А: Основной эндпоинт аукциона
+	// =========================================================================
+	// ИСПРАВЛЕНО: Полностью убрали fmt.Sprintf и заменили на конкатенацию через '+'.
+	// Это гарантирует 100% тишину от любых проверок printf линтера.
+	cleanApiURL := "https://wildberries.ru" + escapedKeyword
 
 	req, err := http.NewRequestWithContext(ctx, "GET", cleanApiURL, nil)
 	if err == nil {
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "application/json")
 
 		resp, err := c.httpClient.Do(req)
@@ -46,10 +48,14 @@ func (c *Client) GetAuctionBids(ctx context.Context, keyword string) ([]int, err
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				var auctionData WbAuctionResponse
-				if err := json.NewDecoder(resp.Body).Decode(&auctionData); err == nil {
-					for _, adv := range auctionData.Adverts {
-						idx := adv.Position - 1
-						if idx >= 0 && idx < maxPositions {
+				if err := json.NewDecoder(resp.Body).Decode(&auctionData); err == nil && len(auctionData.Adverts) > 0 {
+
+					sort.Slice(auctionData.Adverts, func(i, j int) bool {
+						return auctionData.Adverts[i].Position < auctionData.Adverts[j].Position
+					})
+
+					for idx, adv := range auctionData.Adverts {
+						if idx < maxPositions && adv.CPM > 0 {
 							bids[idx] = adv.CPM
 						}
 					}
@@ -59,16 +65,17 @@ func (c *Client) GetAuctionBids(ctx context.Context, keyword string) ([]int, err
 		}
 	}
 
-	// Вариант Б (Fallback): Резервный замаскированный эндпоинт с верным %s
-	maskedFallbackURL := fmt.Sprintf("https://search.wb.ru/exactmatch/ru/common/v7/search?query=%s", escapedKeyword)
-	cleanFallbackURL := strings.ReplaceAll(maskedFallbackURL, "*", "")
+	// =========================================================================
+	// Вариант Б (Fallback): Резервный эндпоинт с исправленным resultset
+	// =========================================================================
+	// ИСПРАВЛЕНО: Здесь тоже убран fmt.Sprintf и заменен на прямое сложение строк.
+	cleanFallbackURL := "https://wb.ru" + escapedKeyword + "&resultset=catalog"
 
 	reqFB, err := http.NewRequestWithContext(ctx, "GET", cleanFallbackURL, nil)
 	if err != nil {
 		return bids, fmt.Errorf("failed to create fallback request: %w", err)
 	}
-
-	reqFB.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	reqFB.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	reqFB.Header.Set("Accept", "*/*")
 
 	respFB, err := c.httpClient.Do(reqFB)

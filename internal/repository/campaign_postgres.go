@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 	"wb-bidder/internal/model"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,10 +18,10 @@ func NewCampaignRepository(pool *pgxpool.Pool) *CampaignRepository {
 }
 
 // GetActiveCampaigns достает из Postgres все кампании, для которых включен биддинг
-// и у чьих владельцев на текущий момент оплачена подписка.
+// и у чьих владельцев на текущий момент оплачена подписка (или активен бессрочный доступ).
 func (r *CampaignRepository) GetActiveCampaigns(ctx context.Context) ([]model.Campaign, error) {
-	// Использование COALESCE защищает приложение от ошибок Scan, если в БД окажутся NULL значения.
-	// Добавлена выборка реального c.strategy_type из базы для поддержки разных режимов.
+	// ИСПРАВЛЕНО: Добавлено поле c.updated_at в выборку
+	// ИСПРАВЛЕНО: Условие подписки теперь корректно обрабатывает NULL (бессрочный доступ)
 	query := `
 		SELECT 
 			c.id, 
@@ -32,10 +33,11 @@ func (r *CampaignRepository) GetActiveCampaigns(ctx context.Context) ([]model.Ca
 			COALESCE(c.max_bid, 1000), 
 			COALESCE(c.min_bid, 150), 
 			COALESCE(c.current_bid, 150), 
-			c.is_active 
+			c.is_active,
+			c.updated_at
 		FROM campaigns c
 		JOIN users u ON c.user_id = u.id
-		WHERE c.is_active = TRUE AND u.subscription_expires_at > NOW()`
+		WHERE c.is_active = TRUE AND (u.subscription_expires_at IS NULL OR u.subscription_expires_at > NOW())`
 
 	rows, err := r.pool.Query(ctx, query)
 	if err != nil {
@@ -47,26 +49,31 @@ func (r *CampaignRepository) GetActiveCampaigns(ctx context.Context) ([]model.Ca
 
 	for rows.Next() {
 		var c model.Campaign
-		var stratType string // Временная переменная для безопасного каста строки в тип StrategyType
+		var updatedAtTime time.Time
 
+		// ИСПРАВЛЕНО: Сканирование происходит в плоские DB-поля модели для 100% совместимости с pgx/v5
 		err := rows.Scan(
 			&c.ID,
 			&c.UserID,
 			&c.WbToken,
-			&c.Strategy.Keyword,
-			&stratType,
-			&c.Strategy.TargetPlace,
-			&c.Strategy.MaxBid,
-			&c.Strategy.MinBid,
+			&c.KeywordDB,
+			&c.StrategyTypeDB,
+			&c.TargetPlaceDB,
+			&c.MaxBidDB,
+			&c.MinBidDB,
 			&c.CurrentBid,
 			&c.IsActive,
+			&updatedAtTime,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
-		// Валидируем и присваиваем тип стратегии
-		c.Strategy.Type = model.StrategyType(stratType)
+		c.UpdatedAt = updatedAtTime
+
+		// Синхронизируем плоские поля во внутреннюю структуру Strategy для бизнес-логики воркеров
+		c.SyncStrategyFromDB()
+
 		campaigns = append(campaigns, c)
 	}
 

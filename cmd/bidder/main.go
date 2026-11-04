@@ -21,6 +21,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// isNightTime проверяет, наступило ли ночное время (с 01:00 до 06:00 по МСК) для защиты от слива бюджета
+func isNightTime() bool {
+	loc, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		loc = time.FixedZone("MSK", 3*60*60)
+	}
+
+	now := time.Now().In(loc)
+	hour := now.Hour()
+
+	return hour >= 1 && hour < 6
+}
+
 func main() {
 	log.Println("Запуск коммерческого АРК-биддера Wildberries...")
 
@@ -47,7 +60,6 @@ func main() {
 		log.Fatalf("База данных не отвечает на пинг: %v", err)
 	}
 	log.Println("Успешное подключение к PostgreSQL.")
-
 	// 3. Инициализируем репозитории и сервисы
 	campRepo := repository.NewCampaignRepository(dbPool)
 	logRepo := repository.NewLogRepository(dbPool)
@@ -65,28 +77,44 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for camp := range campaignChan {
-				// Создаем изолированную копию структуры для каждого воркера
 				localCamp := camp
+
+				// === МЕТОД КОНТРОЛЯ ВРЕМЕНИ (ЗАЩИТА БЮДЖЕТА ПО НОЧАМ) ===
+				if isNightTime() {
+					log.Printf("[Воркер %d] Внимание: Активирован ночной режим защиты бюджета (МСК). Кампания %d переведена в режим ожидания.", workerID, localCamp.ID)
+
+					saveCtx, saveCancel := context.WithTimeout(context.Background(), 4*time.Second)
+
+					// Исправлено обращение: через .Strategy
+					if localCamp.CurrentBid > localCamp.Strategy.MinBid {
+						oldBid := localCamp.CurrentBid
+						localCamp.CurrentBid = localCamp.Strategy.MinBid
+						_ = campRepo.UpdateCampaignBid(saveCtx, localCamp.ID, localCamp.Strategy.MinBid)
+						_ = logRepo.SaveLog(saveCtx, localCamp.ID, oldBid, localCamp.Strategy.MinBid, []int32{}, "Ночная экономия: ставка снижена до минимальной")
+					} else {
+						_ = logRepo.SaveLog(saveCtx, localCamp.ID, localCamp.CurrentBid, localCamp.CurrentBid, []int32{}, "Ночная пауза: удержание минимальной ставки")
+					}
+
+					saveCancel()
+					continue
+				}
 
 				log.Printf("[Воркер %d] Кампания %d: проверка ключевой фразы '%s'", workerID, localCamp.ID, localCamp.Strategy.Keyword)
 
-				// Базовый таймаут на операцию
 				workerCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 
-				// Шаг А: Парсим реальный рекламный аукцион
+				// Шаг А: Парсим реальный рекламный аукцион Wildberries
 				realBids, err := wbCli.GetAuctionBids(workerCtx, localCamp.Strategy.Keyword)
 				if err != nil {
 					log.Printf("[Воркер %d] Ошибка парсинга аукциона для %d: %v", workerID, localCamp.ID, err)
-					// Используем context.Background() ограниченный по времени, так как основной ctx может быть уже отменен
 					saveCtx, saveCancel := context.WithTimeout(context.Background(), 3*time.Second)
-					_ = logRepo.SaveLog(saveCtx, localCamp.ID, localCamp.CurrentBid, localCamp.CurrentBid, []int{}, "Ошибка парсинга аукциона")
+					_ = logRepo.SaveLog(saveCtx, localCamp.ID, localCamp.CurrentBid, localCamp.CurrentBid, []int32{}, "Ошибка парсинга аукциона")
 					saveCancel()
 					cancel()
 					continue
 				}
 
 				oldBid := localCamp.CurrentBid
-
 				// Шаг Б: Рассчитываем и отправляем новую ставку АРК на WB
 				err = engine.CalculateAndApplyARC(workerCtx, &localCamp, realBids)
 
@@ -101,8 +129,14 @@ func main() {
 					_ = campRepo.UpdateCampaignBid(saveCtx, localCamp.ID, localCamp.CurrentBid)
 				}
 
+				// Исправлено: Явное приведение []int к []int32 для логирования
+				realBidsInt32 := make([]int32, len(realBids))
+				for i, v := range realBids {
+					realBidsInt32[i] = int32(v)
+				}
+
 				// Шаг В: Сохраняем результат в историю логов
-				_ = logRepo.SaveLog(saveCtx, localCamp.ID, oldBid, localCamp.CurrentBid, realBids, statusMsg)
+				_ = logRepo.SaveLog(saveCtx, localCamp.ID, oldBid, localCamp.CurrentBid, realBidsInt32, statusMsg)
 				saveCancel()
 				cancel()
 			}
@@ -117,14 +151,12 @@ func main() {
 	apiHandler := apiHttp.NewHandler(dbPool)
 	app.Static("/", "./web")
 
-	// Маршруты API
+	// Маршруты API (Все методы теперь строго соответствуют заглавным буквам в handler.go)
 	app.Get("/api/captcha/script", apiHandler.ProxyYandexCaptcha)
 	app.Get("/api/public/price", apiHandler.GetPublicPrice)
 	app.Get("/api/status", apiHandler.GetStatus)
 	app.Post("/api/auth/register", apiHandler.Register)
 	app.Post("/api/auth/login", apiHandler.Login)
-	app.Post("/api/auth/reset-password", apiHandler.ResetPassword)
-	app.Post("/api/auth/save-password", apiHandler.SavePassword)
 	app.Post("/api/payments/webhook", apiHandler.HandlePaymentWebhook)
 	app.Get("/api/admin/stats", apiHandler.AuthMiddleware, apiHandler.AdminMiddleware, apiHandler.GetAdminStats)
 	app.Post("/api/campaigns", apiHandler.AuthMiddleware, apiHandler.AddCampaign)
@@ -137,8 +169,6 @@ func main() {
 			log.Printf("Уведомление веб-сервера (остановка): %v", err)
 		}
 	}()
-	// --- КОНЕЦ БЛОКА FIBER ---
-
 	// Первичный запуск опроса при старте приложения
 	if activeCampaigns, err := campRepo.GetActiveCampaigns(ctx); err == nil {
 		for _, c := range activeCampaigns {
@@ -164,27 +194,23 @@ func main() {
 				continue
 			}
 
-			log.Printf("Найдено %d активных кампаний.", len(activeCampaigns))
+			log.Printf("Найдено %d active кампаний.", len(activeCampaigns))
 			for _, c := range activeCampaigns {
 				select {
 				case campaignChan <- c:
 				default:
-					log.Printf("[Внимание] Задача для кампании %d пропущена, очередь переполнена!", c.ID)
+					log.Printf("[Внимание] Задача для кампании %d пропущена, queue переполнена!", c.ID)
 				}
 			}
 
 		case <-ctx.Done():
 			log.Println("Получен сигнал остановки. Инициируется Graceful Shutdown...")
 
-			// 1. Первым делом закрываем веб-сервер, чтобы не принимать новые запросы
 			if err := app.ShutdownWithTimeout(5 * time.Second); err != nil {
 				log.Printf("Ошибка при принудительной остановке Fiber: %v", err)
 			}
 
-			// 2. Закрываем канал, чтобы воркеры доработали текущие задачи и вышли из цикла range
 			close(campaignChan)
-
-			// 3. Ожидаем завершения всех запущенных горутин-воркеров
 			wg.Wait()
 
 			log.Println("Сервис биддинга полностью успешно остановлен.")

@@ -21,7 +21,7 @@ func (m *WBClientMock) UpdateAutoCPM(ctx context.Context, token string, campaign
 
 // TestCalculateAndApplyARC — профессиональный табличный Unit-тест
 func TestCalculateAndApplyARC(t *testing.T) {
-	// Описываем тестовые сценарии
+	// Описываем тестовые сценарии с учетом реальной математики аукциона WB
 	tests := []struct {
 		name            string
 		campaign        model.Campaign
@@ -31,95 +31,105 @@ func TestCalculateAndApplyARC(t *testing.T) {
 		expectErr       bool
 	}{
 		{
-			name: "Успешный расчет: перебиваем конкурента на 1 рубль",
+			name: "Успешный расчет: удерживаем 3-е место, перебивая ставку 3-го конкурента",
 			campaign: model.Campaign{
 				ID:         111,
 				CurrentBid: 200,
-				Strategy: model.Strategy{
-					TargetPlace: 3,
-					MinBid:      150,
-					MaxBid:      500,
-					Keyword:     "куртка",
-				},
+				// Используем DB-поля, которые синхронизируются методом SyncStrategyFromDB
+				StrategyTypeDB: "target_place",
+				TargetPlaceDB:  3, // Нужна 3-я позиция
+				MinBidDB:       150,
+				MaxBidDB:       500,
+				KeywordDB:      "куртка",
 			},
-			competitorsBids: []int{400, 350, 300, 250, 200}, // Макс на топ-3 местах — 400 руб
+			competitorsBids: []int{400, 350, 300, 250, 200}, // Ставка на 3-м месте равна 300 руб.
 			mockErr:         nil,
-			expectBid:       401, // 400 + 1 рубль
+			expectBid:       301, // ИСПРАВЛЕНО: 300 + 1 рубль для удержания 3-го места (а не 401!)
 			expectErr:       false,
 		},
 		{
-			name: "Защита бюджета: расчетная ставка выше MaxBid, занижаем до лимита",
+			name: "Защита бюджета: расчетная ставка выше MaxBid, занижаем до лимита селлера",
 			campaign: model.Campaign{
-				ID:         222,
-				CurrentBid: 200,
-				Strategy: model.Strategy{
-					TargetPlace: 2,
-					MinBid:      150,
-					MaxBid:      300, // Лимит селлера
-					Keyword:     "платье",
-				},
+				ID:             222,
+				CurrentBid:     200,
+				StrategyTypeDB: "target_place",
+				TargetPlaceDB:  2,
+				MinBidDB:       150,
+				MaxBidDB:       300, // Лимит селлера
+				KeywordDB:      "платье",
 			},
-			competitorsBids: []int{450, 400, 350}, // Конкуренты дорогие
+			competitorsBids: []int{450, 400, 350}, // Конкуренты слишком дорогие
 			mockErr:         nil,
-			expectBid:       300, // Срезано до MaxBid
+			expectBid:       300, // Срезано ровно до MaxBid
 			expectErr:       false,
 		},
 		{
-			name: "Защита от паники: пустой аукцион, ставим MinBid",
+			name: "Защита от паники: пустой аукцион, выставляем безопасный MinBid",
 			campaign: model.Campaign{
-				ID:         333,
-				CurrentBid: 200,
-				Strategy: model.Strategy{
-					TargetPlace: 3,
-					MinBid:      160,
-					MaxBid:      500,
-				},
+				ID:             333,
+				CurrentBid:     200,
+				StrategyTypeDB: "target_place",
+				TargetPlaceDB:  3,
+				MinBidDB:       160,
+				MaxBidDB:       500,
 			},
-			competitorsBids: []int{}, // Пустой аукцион
+			competitorsBids: []int{}, // Пустая выдача
 			mockErr:         nil,
-			expectBid:       160, // Сработало падение до MinBid
+			expectBid:       160, // Падение до MinBid
+			expectErr:       false,
+		},
+		{
+			name: "Оптимизация вниз: конкуренты просели, биддер снижает ставку для экономии",
+			campaign: model.Campaign{
+				ID:             555,
+				CurrentBid:     450, // Текущая ставка неоправданно завышена
+				StrategyTypeDB: "target_place",
+				TargetPlaceDB:  2,
+				MinBidDB:       150,
+				MaxBidDB:       500,
+			},
+			competitorsBids: []int{300, 200, 180, 150}, // На 2-м месте ставка 200
+			mockErr:         nil,
+			expectBid:       201, // Роняем ставку до 201 рубля, спасая баланс
 			expectErr:       false,
 		},
 		{
 			name: "Обработка сетевой ошибки: API WB вернуло сбой",
 			campaign: model.Campaign{
-				ID:         444,
-				CurrentBid: 200,
-				Strategy: model.Strategy{
-					TargetPlace: 1,
-					MinBid:      150,
-					MaxBid:      500,
-				},
+				ID:             444,
+				CurrentBid:     200,
+				StrategyTypeDB: "target_place",
+				TargetPlaceDB:  1,
+				MinBidDB:       150,
+				MaxBidDB:       500,
 			},
 			competitorsBids: []int{200, 180},
 			mockErr:         errors.New("network timeout"),
-			expectBid:       200, // Ставка в модели не должна измениться при ошибке сети
+			expectBid:       200, // Ставка не должна измениться при ошибке сети
 			expectErr:       true,
 		},
 	}
 
-	// Запускаем каждый тест изолированно
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Инициализируем мок и движок биддера
+			// Синхронизируем Strategy структуру перед тестом
+			tt.campaign.SyncStrategyFromDB()
+
 			mockClient := &WBClientMock{ReturnError: tt.mockErr}
 			engine := NewBidderEngine(mockClient)
 
-			// Вызываем отлаживаемый метод расчёта ставки
 			err := engine.CalculateAndApplyARC(context.Background(), &tt.campaign, tt.competitorsBids)
 
-			// 1. Проверяем, совпадает ли наличие ошибки с ожидаемым
 			if (err != nil) != tt.expectErr {
 				t.Fatalf("Ожидалась ошибка: %v, получили: %v", tt.expectErr, err)
 			}
 
-			// 2. Если ошибки сети не было, проверяем корректность логики изменения ставки
 			if tt.mockErr == nil {
 				if tt.campaign.CurrentBid != tt.expectBid {
-					t.Errorf("Логика биддинга сломана! Ожидали ставку %d, но код выставил %d", tt.expectBid, tt.campaign.CurrentBid)
+					t.Errorf("[%s] Неверный расчет! Ожидали CPM %d, но код выставил %d", tt.name, tt.expectBid, tt.campaign.CurrentBid)
 				}
 				if mockClient.CalledWithBid != tt.expectBid {
-					t.Errorf("В API WB отправлена неверная ставка! Ожидали %d, отправлено %d", tt.expectBid, mockClient.CalledWithBid)
+					t.Errorf("[%s] В API WB отправлена неверная ставка! Ожидали %d, ушло %d", tt.name, tt.expectBid, mockClient.CalledWithBid)
 				}
 			}
 		})

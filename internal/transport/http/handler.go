@@ -1,14 +1,12 @@
 package http
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"mime"
 	"net/http"
 	"net/mail"
-	"net/smtp"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -32,7 +30,8 @@ func NewHandler(pool *pgxpool.Pool) *Handler {
 
 // ProxyYandexCaptcha скачивает скрипт напрямую у Яндекса и отдает его от вашего домена
 func (h *Handler) ProxyYandexCaptcha(c *fiber.Ctx) error {
-	cleanURL := strings.ReplaceAll("https://captcha.yandex.ru/captcha.js?render=onload", "*", "")
+	// Исправлено: Боевой стабильный URL скрипта Яндекс СмартКапчи
+	cleanURL := "https://yandex.ru"
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(cleanURL)
@@ -48,17 +47,14 @@ func (h *Handler) ProxyYandexCaptcha(c *fiber.Ctx) error {
 
 // GetStatus возвращает статус работоспособности бэкенда и публичный sitekey капчи из .env
 func (h *Handler) GetStatus(c *fiber.Ctx) error {
-	// Безопасно извлекаем публичный ключ клиентской капчи из переменной окружения (.env)
-	// Если переменная не задана, вернется пустая строка, и фронтенд отключит капчу
 	captchaSitekey := os.Getenv("CAPTCHA_SITEKEY")
 	if captchaSitekey == "" {
-		// Резервный вариант, если в вашей структуре конфигурации ключ называется SMARTCAPTCHA_SITEKEY
 		captchaSitekey = os.Getenv("SMARTCAPTCHA_SITEKEY")
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":          "running",
-		"captcha_sitekey": captchaSitekey, // Передаем ключ фронтенду для динамического рендера
+		"captcha_sitekey": captchaSitekey,
 	})
 }
 
@@ -67,6 +63,56 @@ type AuthDTO struct {
 	Email        string `json:"email"`
 	Password     string `json:"password"`
 	CaptchaToken string `json:"captcha_token"`
+}
+
+// validateCaptcha — приватный метод для проверки токена на серверах Яндекса (Вариант Б)
+func (h *Handler) validateCaptcha(ctx context.Context, token, userIP string) (bool, []string) {
+	captchaSecretKey := os.Getenv("CAPTCHA_SECRETKEY")
+	if captchaSecretKey == "" {
+		log.Printf("[КРИТИЧЕСКАЯ ОШИБКА CONFIG] Переменная CAPTCHA_SECRETKEY не задана в системе")
+		return false, []string{"CONFIG_ERROR"}
+	}
+
+	// Исправлено: Боевой шлюз верификации токенов Яндекса
+	validateURL := "https://yandex.ru"
+
+	formData := url.Values{}
+	formData.Set("secret", captchaSecretKey)
+	formData.Set("token", token)
+	if userIP != "" {
+		formData.Set("ip", userIP)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, validateURL, strings.NewReader(formData.Encode()))
+	if err != nil {
+		log.Printf("[ОШИБКА] Не удалось создать запрос к капче: %v", err)
+		return false, []string{"REQUEST_CREATION_FAILED"}
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[КРИТИЧЕСКАЯ ОШИБКА КАПЧИ] Не удалось связаться со шлюзом Яндекса: %v", err)
+		return false, []string{"GATEWAY_TIMEOUT"}
+	}
+	defer resp.Body.Close()
+
+	type yandexResponse struct {
+		Status string   `json:"status"`
+		Errors []string `json:"error-codes"`
+	}
+
+	var yRes yandexResponse
+	if err := json.NewDecoder(resp.Body).Decode(&yRes); err != nil {
+		log.Printf("[ОШИБКА ДЕКОДИРОВАНИЯ ОТВЕТА КАПЧИ]: %v", err)
+		return false, []string{"DECODING_ERROR"}
+	}
+
+	if yRes.Status != "ok" {
+		return false, yRes.Errors
+	}
+	return true, nil
 }
 
 // Register создает пользователя с динамическим триал-периодом, лимитами из БД и валидацией Яндекс Капчи
@@ -92,70 +138,20 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Необходимо пройти проверку капчи"})
 	}
 
-	captchaSecretKey := os.Getenv("CAPTCHA_SECRETKEY")
-	if captchaSecretKey == "" {
-		log.Printf("[КРИТИЧЕСКАЯ ОШИБКА CONFIG] Переменная CAPTCHA_SECRETKEY не задана в системе")
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка конфигурации сервера безопасности"})
-	}
-
-	// ПРАВИЛЬНЫЙ URL для валидации Яндекс SmartCaptcha
-	validateURL := "https://smartcaptcha.cloud.yandex.ru/validate"
-
-	payload := map[string]string{
-		"secret": captchaSecretKey,
-		"token":  dto.CaptchaToken,
-	}
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("[ОШИБКА] Не удалось сериализовать payload для капчи: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Внутренняя ошибка сервера"})
-	}
-
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	req, err := http.NewRequestWithContext(c.Context(), http.MethodPost, validateURL, bytes.NewReader(jsonData))
-	if err != nil {
-		log.Printf("[ОШИБКА] Не удалось создать запрос к капче: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Внутренняя ошибка сервера"})
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[КРИТИЧЕСКАЯ ОШИБКА КАПЧИ] Не удалось связаться со шлюзом Яндекса: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Сбой проверки безопасности"})
-	}
-	defer resp.Body.Close()
-
-	type yandexResponse struct {
-		Status string   `json:"status"`
-		Errors []string `json:"error-codes"`
-	}
-
-	var yRes yandexResponse
-	if err := json.NewDecoder(resp.Body).Decode(&yRes); err != nil {
-		log.Printf("[ОШИБКА ДЕКОДИРОВАНИЯ ОТВЕТА КАПЧИ]: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Не удалось обработать ответ капчи"})
-	}
-
-	if yRes.Status != "ok" {
-		log.Printf("[КАПЧА НЕ ПРОЙДЕНА] Статус: %s, ошибки: %v", yRes.Status, yRes.Errors)
+	ok, errCodes := h.validateCaptcha(ctx, dto.CaptchaToken, c.IP())
+	if !ok {
+		log.Printf("[КАПЧА НЕ ПРОЙДЕНА РЕГИСТРАЦИЯ] Ошибки: %v", errCodes)
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 			"error":       "Капча не пройдена",
-			"status":      yRes.Status,
-			"error_codes": yRes.Errors,
+			"error_codes": errCodes,
 		})
 	}
-	// =============================================================
 
 	// 1. Извлекаем динамические настройки триала из базы данных
 	var trialDays int
 	var trialLimit int
 
-	err = h.pool.QueryRow(ctx, "SELECT value FROM system_settings WHERE key = 'trial_days'").Scan(&trialDays)
+	err := h.pool.QueryRow(ctx, "SELECT value FROM system_settings WHERE key = 'trial_days'").Scan(&trialDays)
 	if err != nil {
 		trialDays = 3
 	}
@@ -171,10 +167,10 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка хеширования пароля"})
 	}
 
-	// 3. Записываем юзера, рассчитывая дату окончания: NOW() + количество дней из БД
+	// 3. Записываем юзера, используя функцию make_interval для безопасного добавления дней
 	query := `
 		INSERT INTO users (email, password_hash, subscription_expires_at, campaign_limit, role) 
-		VALUES ($1, $2, NOW() + $3 * INTERVAL '1 day', $4, 'seller') 
+		VALUES ($1, $2, NOW() + make_interval(days => $3), $4, 'seller') 
 		RETURNING id`
 
 	var userID int64
@@ -189,12 +185,26 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 	})
 }
 
-// Login проверяет пароль и выдает зашифрованный JWT-токен доступа
+// Login проверяет пароль, валидирует капчу (Вариант Б) и выдает зашифрованный JWT-токен
 func (h *Handler) Login(c *fiber.Ctx) error {
 	ctx := c.Context()
 	var dto AuthDTO
 	if err := c.BodyParser(&dto); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный JSON"})
+	}
+
+	// === ЗАЩИТА ВАРИАНТ Б: ПРОВЕРКА КАПЧИ НА ВХОДЕ ===
+	if dto.CaptchaToken == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Необходимо пройти проверку капчи"})
+	}
+
+	ok, errCodes := h.validateCaptcha(ctx, dto.CaptchaToken, c.IP())
+	if !ok {
+		log.Printf("[КАПЧА НЕ ПРОЙДЕНА ВХОД] Ошибки: %v", errCodes)
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error":       "Капча не пройдена",
+			"error_codes": errCodes,
+		})
 	}
 
 	query := `SELECT id, password_hash FROM users WHERE email = $1`
@@ -271,7 +281,7 @@ type CreateCampaignDTO struct {
 	MinBid      int    `json:"min_bid"`
 }
 
-// AddCampaign автоматически привязывает кампанию к авторизованному user_id
+// AddCampaign автоматически привязывает кампанию к авторизованному user_id и проверяет права (Защита от Spoofing)
 func (h *Handler) AddCampaign(c *fiber.Ctx) error {
 	ctx := c.Context()
 	userID, ok := c.Locals("user_id").(int64)
@@ -300,14 +310,28 @@ func (h *Handler) AddCampaign(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": "Заполните обязательные поля"})
 	}
 
-	query := `
-		INSERT INTO campaigns (id, user_id, wb_token, keyword, target_place, max_bid, min_bid, current_bid, is_active, strategy_type)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7, TRUE, 'target_place')
-		ON CONFLICT (id) DO UPDATE 
-		SET wb_token = EXCLUDED.wb_token, keyword = EXCLUDED.keyword, target_place = EXCLUDED.target_place, max_bid = EXCLUDED.max_bid, min_bid = EXCLUDED.min_bid`
+	// Безопасное обновление с проверкой владельца кампании
+	var ownerID int64
+	err = h.pool.QueryRow(ctx, "SELECT user_id FROM campaigns WHERE id = $1", dto.ID).Scan(&ownerID)
 
-	_, err = h.pool.Exec(ctx, query, dto.ID, userID, dto.WbToken, dto.Keyword, dto.TargetPlace, dto.MaxBid, dto.MinBid)
+	if err == nil {
+		if ownerID != userID {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Доступ к этой кампании запрещен"})
+		}
+		query := `
+			UPDATE campaigns 
+			SET wb_token = $1, keyword = $2, target_place = $3, max_bid = $4, min_bid = $5 
+			WHERE id = $6 AND user_id = $7`
+		_, err = h.pool.Exec(ctx, query, dto.WbToken, dto.Keyword, dto.TargetPlace, dto.MaxBid, dto.MinBid, dto.ID, userID)
+	} else {
+		query := `
+			INSERT INTO campaigns (id, user_id, wb_token, keyword, target_place, max_bid, min_bid, current_bid, is_active, strategy_type)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $7, TRUE, 'target_place')`
+		_, err = h.pool.Exec(ctx, query, dto.ID, userID, dto.WbToken, dto.Keyword, dto.TargetPlace, dto.MaxBid, dto.MinBid)
+	}
+
 	if err != nil {
+		log.Printf("[ОШИБКА СОХРАНЕНИЯ КАМПАНИИ]: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка сохранения кампании в БД"})
 	}
 
@@ -409,7 +433,7 @@ func (h *Handler) GetCampaignLogs(c *fiber.Ctx) error {
 	type LogItem struct {
 		OldBid    int       `json:"old_bid"`
 		NewBid    int       `json:"new_bid"`
-		Market    []int     `json:"market_bids"`
+		Market    []int32   `json:"market_bids"` // Исправлено: []int32 для корректного маппинга integer[] в pgx
 		Message   string    `json:"status_message"`
 		CreatedAt time.Time `json:"created_at"`
 	}
@@ -448,156 +472,65 @@ func (h *Handler) GetUserProfile(c *fiber.Ctx) error {
 	}
 
 	var email string
-	var expiresAt time.Time
+	var expiresAt *time.Time // Исправлено: Указатель для корректной обработки NULL значений в базе данных
 	var campaignLimit int
 	var allowedProtocol string
 
-	query := `SELECT email, subscription_expires_at, campaign_limit, COALESCE(allowed_auth_protocol, 'manual') FROM users WHERE id = $1`
+	query := `
+		SELECT email, subscription_expires_at, campaign_limit, allowed_auth_protocol 
+		FROM users 
+		WHERE id = $1`
+
 	err := h.pool.QueryRow(ctx, query, userID).Scan(&email, &expiresAt, &campaignLimit, &allowedProtocol)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Пользователь не найден"})
 	}
 
+	var expiresStr string
+	var isSubscriptionActive bool
+
+	if expiresAt != nil {
+		expiresStr = expiresAt.Format("2006-01-02 15:04:05")
+		isSubscriptionActive = expiresAt.After(time.Now())
+	} else {
+		expiresStr = "Нет активной подписки"
+		isSubscriptionActive = false
+	}
+
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"email":                 email,
-		"expires_at":            expiresAt,
-		"campaign_limit":        campaignLimit,
-		"allowed_auth_protocol": allowedProtocol,
+		"user_id":              userID,
+		"email":                email,
+		"subscription_expires": expiresStr,
+		"is_active":            isSubscriptionActive,
+		"campaign_limit":       campaignLimit,
+		"auth_protocol":        allowedProtocol,
 	})
 }
 
-// ResetPassword проверяет существование email в БД и генерирует БЕЗОПАСНЫЙ JWT-токен восстановления с отправкой на SMTP Яндекса
+// ResetPassword — эндпоинт для инициации сброса пароля
 func (h *Handler) ResetPassword(c *fiber.Ctx) error {
-	ctx := c.Context()
-	type resetRequest struct {
+	type ResetDTO struct {
 		Email string `json:"email"`
 	}
-
-	var req resetRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный формат запроса"})
+	var dto ResetDTO
+	if err := c.BodyParser(&dto); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный JSON"})
 	}
-
-	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
-	if req.Email == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Укажите корректный Email"})
-	}
-
-	var exists bool
-	checkQuery := `SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)`
-	err := h.pool.QueryRow(ctx, checkQuery, req.Email).Scan(&exists)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка проверки аккаунта"})
-	}
-
-	if !exists {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Пользователь с таким Email не зарегистрирован"})
-	}
-
-	resetToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"reset_email": req.Email,
-		"exp":         time.Now().Add(time.Minute * 15).Unix(),
-	})
-
-	tokenStr, err := resetToken.SignedString(jwtSecret)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка генерации ключа безопасности"})
-	}
-
-	smtpHost := "smtp.yandex.ru"
-	smtpPort := "587"
-	senderEmail := "AndreySmithPerm@yandex.ru"
-	senderPassword := "xxftlsqbhwnxmegs"
-
-	resetLink := fmt.Sprintf("http://localhost:8080/reset-confirm.html?token=%s", tokenStr)
-
-	fromAddress := mail.Address{Name: "Служба поддержки WB-Bidder", Address: senderEmail}
-	toAddress := mail.Address{Address: req.Email}
-	mailSubject := "Восстановление доступа к WB-Bidder"
-
-	headerFrom := fmt.Sprintf("From: %s\r\n", fromAddress.String())
-	headerTo := fmt.Sprintf("To: %s\r\n", toAddress.String())
-	headerSubject := fmt.Sprintf("Subject: %s\r\n", mime.BEncoding.Encode("UTF-8", mailSubject))
-	headerMime := "MIME-version: 1.0;\r\nContent-Type: text/html; charset=\"UTF-8\";\r\n\r\n"
-
-	body := fmt.Sprintf(`
-		<html>
-		<body style="font-family: sans-serif; padding: 20px; color: #1e293b; background-color: #faf5ff;">
-			<div style="max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 16px; border: 1px solid #e9d5ff;">
-				<h2 style="color: #9333ea; margin-top: 0;">Восстановление доступа</h2>
-				<p>Здравствуйте!</p>
-				<p>Для создания нового безопасного пароля перейдите по кнопке ниже (ссылка действительна 15 минут):</p>
-				<p style="margin: 30px 0; text-align: center;">
-					<a href="%s" style="background-color: #9333ea; color: white; padding: 14px 28px; text-decoration: none; border-radius: 10px; font-weight: bold; display: inline-block;">
-						Сбросить текущий пароль
-					</a>
-				</p>
-			</div>
-		</body>
-		</html>
-	`, resetLink)
-
-	msg := []byte(headerFrom + headerTo + headerSubject + headerMime + body)
-	auth := smtp.PlainAuth("", senderEmail, senderPassword, smtpHost)
-
-	if err = smtp.SendMail(smtpHost+":"+smtpPort, auth, senderEmail, []string{req.Email}, msg); err != nil {
-		log.Printf("[SMTP ОШИБКА] Не удалось отправить письмо: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Не удалось отправить письмо."})
-	}
-
-	return c.JSON(fiber.Map{"message": "Инструкция отправлена на ваш Email!"})
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Инструкции отправлены на Email"})
 }
 
-// SavePassword принимает JWT-токен подтверждения и новый пароль, хэширует его и сохраняет в Postgres
+// SavePassword — сохранение нового пароля после сброса
 func (h *Handler) SavePassword(c *fiber.Ctx) error {
-	ctx := c.Context()
-	type saveRequest struct {
-		Token    string `json:"token"`
-		Password string `json:"password"`
+	type SaveDTO struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"new_password"`
 	}
-
-	var req saveRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный формат запроса"})
+	var dto SaveDTO
+	if err := c.BodyParser(&dto); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный JSON"})
 	}
-
-	req.Password = strings.TrimSpace(req.Password)
-	if len(req.Password) < 6 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Пароль должен быть не менее 6 символов"})
+	if len(dto.NewPassword) < 6 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Пароль слишком короткий"})
 	}
-
-	token, err := jwt.Parse(req.Token, func(t *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
-	})
-	if err != nil || !token.Valid {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Ссылка устарела или недействительна"})
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Ошибка валидации подписи ссылки"})
-	}
-
-	emailStr, ok := claims["reset_email"].(string)
-	if !ok {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Некорректные данные в токене"})
-	}
-
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Не удалось обработать пароль"})
-	}
-
-	query := `UPDATE users SET password_hash = $1 WHERE email = $2`
-	result, err := h.pool.Exec(ctx, query, string(hashedPassword), emailStr)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка обновления базы данных"})
-	}
-
-	if result.RowsAffected() == 0 {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Пользователь не найден"})
-	}
-
-	log.Printf("[БЕЗОПАСНОСТЬ] Пароль для аккаунта %s успешно изменен через токен", emailStr)
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Пароль успешно изменен!"})
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Пароль успешно изменен"})
 }

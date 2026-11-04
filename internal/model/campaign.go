@@ -26,6 +26,33 @@ type Campaign struct {
 	WbToken    string    `json:"-"`           // API-ключ WB (токен "Реклама")
 	CurrentBid int       `json:"current_bid"` // Текущая ставка в рублях
 	IsActive   bool      `json:"is_active"`   // Включен ли биддинг для этой кампании у нас
-	Strategy   Strategy  `json:"strategy"`    // Активная стратегия
+	Strategy   Strategy  `json:"strategy"`    // Активная стратегия для JSON API
 	UpdatedAt  time.Time `json:"updated_at"`
+
+	// ИСПРАВЛЕНО ДЛЯ PGX: Плоские поля для безопасного сканирования (Scan) из БД в репозитории
+	StrategyTypeDB string `json:"-"`
+	TargetPlaceDB  int    `json:"-"`
+	MaxBidDB       int    `json:"-"`
+	MinBidDB       int    `json:"-"`
+	KeywordDB      string `json:"-"`
+}
+
+// SyncStrategyFromDB заполняет вложенную структуру Strategy на основе плоских полей из базы данных
+func (c *Campaign) SyncStrategyFromDB() {
+	c.Strategy = Strategy{
+		Type:        StrategyType(c.StrategyTypeDB),
+		TargetPlace: c.TargetPlaceDB,
+		MaxBid:      c.MaxBidDB,
+		MinBid:      c.MinBidDB,
+		Keyword:     c.KeywordDB,
+	}
+}
+
+// SyncDBFromStrategy переносит данные из структуры Strategy в плоские поля для сохранения в БД
+func (c *Campaign) SyncDBFromStrategy() {
+	c.StrategyTypeDB = string(c.Strategy.Type)
+	c.TargetPlaceDB = c.Strategy.TargetPlace
+	c.MaxBidDB = c.Strategy.MaxBid
+	c.MinBidDB = c.Strategy.MinBid
+	c.KeywordDB = c.Strategy.Keyword
 }
