@@ -167,31 +167,52 @@
         const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
         const captchaBox = document.getElementById('yandex-captcha-box');
         let isLogin = true;
-        let captchaWidgetId = null; // Здесь будем хранить реальный ID виджета Яндекса
+        let captchaWidgetId = null;
+        let isCaptchaReady = false; // Флаг готовности капчи
 
-        // 1. ИСПРАВЛЕНО: Колбэк, который вызывается СТРОГО после загрузки скрипта Яндекса
+        // 1. Колбэк от Яндекса: срабатывает, когда JS SDK полностью загружен
         window.onloadSmartCaptcha = function() {
-            console.log("Модуль Яндекс СмартКапчи успешно привязан к контексту страницы");
+            console.log("SDK Яндекс Капчи готов. Запрос ключа у бэкенда...");
             
-            // Запрашиваем публичный ключ у нашего Go-бэкенда (эндпоинт /api/status)
+            // Блокируем форму, пока не получим ключ
+            if(submitBtn) submitBtn.disabled = true;
+
             fetch('/api/status')
-                .then(res => res.json())
+                .then(res => {
+                    if (!res.ok) throw new Error('Network error: ' + res.status);
+                    return res.json();
+                })
                 .then(data => {
                     if (data.captcha_sitekey && window.smartCaptcha && captchaBox) {
-                        // Динамически рендерим капчу в контейнер и сохраняем её реальный ID
+                        // Рендер только здесь
                         captchaWidgetId = window.smartCaptcha.render(captchaBox, {
                             sitekey: data.captcha_sitekey,
-                            invisible: false, // Делаем капчу видимой «Я не робот»
+                            invisible: false,
                             shieldPosition: 'bottom-right',
                             callback: function(token) {
-                                console.log("Капча успешно пройдена пользователем");
+                                console.log("Капча пройдена, токен получен");
+                                isCaptchaReady = true;
+                            },
+                            'error-callback': function(err) {
+                                console.error("Ошибка виджета капчи:", err);
+                                if(submitBtn) submitBtn.disabled = true;
                             }
                         });
-                        console.log("Капча успешно отрисована с ID виджета:", captchaWidgetId);
+                        
+                        isCaptchaReady = true;
+                        if(submitBtn) submitBtn.disabled = false;
+                        console.log("Капча успешно отрисована. ID виджета:", captchaWidgetId);
                     } else {
-                        console.error("Бэкенд не вернул CAPTCHA_SITEKEY или контейнер не найден");
+                        throw new Error('Missing captcha_sitekey or window.smartCaptcha');
                     }
-                }).catch(err => console.error("Ошибка получения статуса капчи:", err));
+                })
+                .catch(err => {
+                    console.error("Критическая ошибка инициализации капчи:", err);
+                    if(captchaBox) {
+                        captchaBox.innerHTML = '<div style="color:red; font-size:12px; text-align:center; padding:10px;">Ошибка загрузки защиты. Попробуйте обновить страницу.</div>';
+                    }
+                    if(submitBtn) submitBtn.disabled = true;
+                });
         };
 
         // Подгружаем цену подписки на лендинг
@@ -207,7 +228,7 @@
             .then(data => {
                 document.getElementById('footerRequisites').innerHTML = `
                     <p class="font-bold text-slate-200 text-base">${data.status} ${data.fio}</p>
-                    <p>ИНН: ${data.inn}</p>
+                    <p>ИНН: \${data.inn}</p>
                     <p>Email: ${data.email} | Тел: ${data.phone}</p>
                 `;
             }).catch(() => {
@@ -229,21 +250,21 @@
         // Логика отправки формы авторизации и регистрации
         authForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-
-            // ИСПРАВЛЕНО: Извлекаем проверочный токен строго по сохраненному числу captchaWidgetId
+            
+            // ПРОВЕРКА: Капча должна быть не просто отрисована, но и пройдена
             let captchaToken = "";
             if (window.smartCaptcha && captchaWidgetId !== null) {
                 captchaToken = window.smartCaptcha.getResponse(captchaWidgetId);
             }
-            
+
             if (!captchaToken) {
                 alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
                 return;
             }
 
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
             const payload = { email, password, captcha_token: captchaToken };
             
             try {
@@ -258,7 +279,6 @@
                 
                 if (!response.ok) { 
                     alert(data.error || 'Ошибка авторизации'); 
-                    // ИСПРАВЛЕНО: Сброс капчи по сохраненному ID виджета при ошибке
                     if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
                     return; 
                 }
@@ -275,7 +295,6 @@
                     toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
                     if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
                     
-                    // ИСПРАВЛЕНО: Сброс токена после успешной регистрации
                     if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
                 }
             } catch (err) { 
@@ -297,3 +316,4 @@
     </script>
   </body>
 </html>
+
