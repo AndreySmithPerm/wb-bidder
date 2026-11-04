@@ -166,15 +166,16 @@
         const toggleAuth = document.getElementById('toggleAuth');
         const forgotPasswordBtn = document.getElementById('forgotPasswordBtn');
         const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
-        const captchaBox = document.getElementById('yandex-captcha-box');
         let isLogin = true;
+        let captchaWidgetId = null; // Будем хранить ID здесь, если потребуется
 
         const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
         const registerSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
 
-        // Колбэк, который Яндекс вызывает после загрузки captcha.js (render=onload сам отрисует виджет в data-sitekey контейнере)
+        // Колбэк Яндекс СмартКапчи
         window.onloadSmartCaptcha = function() {
             console.log("Модуль Яндекс СмартКапчи успешно привязан к контексту страницы");
+            // Если на странице одна капча с классом smart-captcha, Яндекс автоматически инициализирует её.
         };
 
         // Подгружаем цену подписки на лендинг
@@ -184,17 +185,17 @@
                 if(data.price) document.getElementById('landingPrice').innerText = data.price.toLocaleString('ru-RU');
             }).catch(() => {});
 
-        // Динамическая подгрузка реквизитов в футер из отдельного файла
+        // Динамическая подгрузка реквизитов (исправлен цвет текста text-slate-800 на text-slate-200)
         fetch('/data/requisites.json')
             .then(res => res.json())
             .then(data => {
                 document.getElementById('footerRequisites').innerHTML = `
-                    <p class="font-bold text-slate-800 text-base">${data.status} ${data.fio}</p>
+                    <p class="font-bold text-slate-200 text-base">${data.status} ${data.fio}</p>
                     <p>ИНН: ${data.inn}</p>
                     <p>Email: ${data.email} | Тел: ${data.phone}</p>
                 `;
             }).catch(() => {
-                document.getElementById('footerRequisites').innerHTML = `<p class="font-bold text-slate-800">Самозанятый Кузнецов Андрей Владимирович</p><p>Контакты обновляются</p>`;
+                document.getElementById('footerRequisites').innerHTML = `<p class="font-bold text-slate-200">Самозанятый Кузнецов Андрей Владимирович</p><p>Контакты обновляются</p>`;
             });
 
         toggleAuth.addEventListener('click', () => {
@@ -208,18 +209,19 @@
             }
         });
 
-        // Логика отправки формы авторизации и регистрации с проверкой SmartCaptcha
+        // Логика отправки формы
         authForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
 
-            // Извлекаем проверочный токен SmartCaptcha (капча видна всегда)
+            // ИСПРАВЛЕНО: Извлекаем проверочный токен без передачи DOM-элемента (для единственной капчи на странице)
             let captchaToken = "";
-            if (window.smartCaptcha && captchaBox) {
-                captchaToken = window.smartCaptcha.getResponse(captchaBox);
+            if (window.smartCaptcha) {
+                captchaToken = window.smartCaptcha.getResponse(); 
             }
+            
             if (!captchaToken) {
                 alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
                 return;
@@ -239,8 +241,8 @@
                 
                 if (!response.ok) { 
                     alert(data.error || 'Ошибка авторизации'); 
-                    // Сбрасываем виджет капчи при ошибке, чтобы роботы не могли использовать токен повторно
-                    if (window.smartCaptcha && captchaBox) window.smartCaptcha.reset(captchaBox);
+                    // ИСПРАВЛЕНО: Сброс капчи без передачи DOM-элемента
+                    if (window.smartCaptcha) window.smartCaptcha.reset();
                     return; 
                 }
 
@@ -255,8 +257,8 @@
                     toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
                     if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
                     
-                    // Токен одноразовый: после успешной регистрации обновляем капчу для следующего входа
-                    if (window.smartCaptcha && captchaBox) window.smartCaptcha.reset(captchaBox);
+                    // ИСПРАВЛЕНО: Сброс капчи после успешной регистрации
+                    if (window.smartCaptcha) window.smartCaptcha.reset();
                 }
             } catch (err) { 
                 alert('Ошибка сети: не удалось связаться с Go-сервером'); 
