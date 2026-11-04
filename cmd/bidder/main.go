@@ -47,7 +47,13 @@ func main() {
 		log.Fatalf("Ошибка загрузки конфигурации: %v", err)
 	}
 
-	cleanDbURL := strings.ReplaceAll(cfg.DbURL, "*", "")
+	// ИСПРАВЛЕНО: Приоритетное чтение строки подключения из системного окружения (.env сервера)
+	cleanDbURL := os.Getenv("DATABASE_URL")
+	if cleanDbURL == "" {
+		// Если в системном окружении пусто (например, локальный запуск на ПК),
+		// откатываемся на кастомный конфиг из пакета config
+		cleanDbURL = strings.ReplaceAll(cfg.DbURL, "*", "")
+	}
 
 	// 2. Инициализируем пул соединений с PostgreSQL
 	dbPool, err := pgxpool.New(ctx, cleanDbURL)
