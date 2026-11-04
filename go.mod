@@ -1,6 +1,6 @@
 module wb-bidder
 
-go 1.27.2
+go 1.23
 
 require (
 	github.com/gofiber/fiber/v2 v2.52.16
