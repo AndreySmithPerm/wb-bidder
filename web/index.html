@@ -8,7 +8,7 @@
 
     <!-- Официальное стабильное подключение Яндекс Капчи:
          onload-колбэк + автопоиск контейнеров smart-captcha (render=onload) -->
-    <script src="https://smartcaptcha.cloud.yandex.ru/captcha.js?onload=onloadSmartCaptcha&render=onload" defer></script>
+    <script src="https://smartcaptcha.cloud.yandex.ru/captcha.js?onload=onloadSmartCaptcha" defer></script>
 
     <style>
       body { 
@@ -105,7 +105,7 @@
 
             <!-- Контейнер капчи: видна сразу при загрузке страницы, sitekey подставляет сервер -->
             <div id="captchaContainer" class="mb-4 flex justify-center">
-              <div id="yandex-captcha-box" class="smart-captcha" data-sitekey="__SMARTCAPTCHA_SITEKEY__"></div>
+              <div id="yandex-captcha-box" class="smart-captcha"></div>
             </div>
 
             <button type="submit" id="submitBtn" 
@@ -164,18 +164,34 @@
         const authTitle = document.getElementById('authTitle');
         const submitBtn = document.getElementById('submitBtn');
         const toggleAuth = document.getElementById('toggleAuth');
-        const forgotPasswordBtn = document.getElementById('forgotPasswordBtn');
         const forgotPasswordContainer = document.getElementById('forgotPasswordContainer');
+        const captchaBox = document.getElementById('yandex-captcha-box');
         let isLogin = true;
-        let captchaWidgetId = null; // Будем хранить ID здесь, если потребуется
+        let captchaWidgetId = null; // Здесь будем хранить реальный ID виджета Яндекса
 
-        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
-        const registerSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
-
-        // Колбэк Яндекс СмартКапчи
+        // 1. ИСПРАВЛЕНО: Колбэк, который вызывается СТРОГО после загрузки скрипта Яндекса
         window.onloadSmartCaptcha = function() {
             console.log("Модуль Яндекс СмартКапчи успешно привязан к контексту страницы");
-            // Если на странице одна капча с классом smart-captcha, Яндекс автоматически инициализирует её.
+            
+            // Запрашиваем публичный ключ у нашего Go-бэкенда (эндпоинт /api/status)
+            fetch('/api/status')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.captcha_sitekey && window.smartCaptcha && captchaBox) {
+                        // Динамически рендерим капчу в контейнер и сохраняем её реальный ID
+                        captchaWidgetId = window.smartCaptcha.render(captchaBox, {
+                            sitekey: data.captcha_sitekey,
+                            invisible: false, // Делаем капчу видимой «Я не робот»
+                            shieldPosition: 'bottom-right',
+                            callback: function(token) {
+                                console.log("Капча успешно пройдена пользователем");
+                            }
+                        });
+                        console.log("Капча успешно отрисована с ID виджета:", captchaWidgetId);
+                    } else {
+                        console.error("Бэкенд не вернул CAPTCHA_SITEKEY или контейнер не найден");
+                    }
+                }).catch(err => console.error("Ошибка получения статуса капчи:", err));
         };
 
         // Подгружаем цену подписки на лендинг
@@ -185,7 +201,7 @@
                 if(data.price) document.getElementById('landingPrice').innerText = data.price.toLocaleString('ru-RU');
             }).catch(() => {});
 
-        // Динамическая подгрузка реквизитов (исправлен цвет текста text-slate-800 на text-slate-200)
+        // Динамическая подгрузка реквизитов
         fetch('/data/requisites.json')
             .then(res => res.json())
             .then(data => {
@@ -200,7 +216,8 @@
 
         toggleAuth.addEventListener('click', () => {
             isLogin = !isLogin;
-            authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
+            const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+            authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + loginSvg;
             submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
             toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
             
@@ -209,17 +226,17 @@
             }
         });
 
-        // Логика отправки формы
+        // Логика отправки формы авторизации и регистрации
         authForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
 
-            // ИСПРАВЛЕНО: Извлекаем проверочный токен без передачи DOM-элемента (для единственной капчи на странице)
+            // ИСПРАВЛЕНО: Извлекаем проверочный токен строго по сохраненному числу captchaWidgetId
             let captchaToken = "";
-            if (window.smartCaptcha) {
-                captchaToken = window.smartCaptcha.getResponse(); 
+            if (window.smartCaptcha && captchaWidgetId !== null) {
+                captchaToken = window.smartCaptcha.getResponse(captchaWidgetId);
             }
             
             if (!captchaToken) {
@@ -241,8 +258,8 @@
                 
                 if (!response.ok) { 
                     alert(data.error || 'Ошибка авторизации'); 
-                    // ИСПРАВЛЕНО: Сброс капчи без передачи DOM-элемента
-                    if (window.smartCaptcha) window.smartCaptcha.reset();
+                    // ИСПРАВЛЕНО: Сброс капчи по сохраненному ID виджета при ошибке
+                    if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
                     return; 
                 }
 
@@ -252,13 +269,14 @@
                 } else {
                     alert('Регистрация успешна! Теперь вы можете войти.');
                     isLogin = true;
+                    const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
                     authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
                     submitBtn.innerText = 'Войти';
                     toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
                     if (forgotPasswordContainer) forgotPasswordContainer.style.display = 'block';
                     
-                    // ИСПРАВЛЕНО: Сброс капчи после успешной регистрации
-                    if (window.smartCaptcha) window.smartCaptcha.reset();
+                    // ИСПРАВЛЕНО: Сброс токена после успешной регистрации
+                    if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
                 }
             } catch (err) { 
                 alert('Ошибка сети: не удалось связаться с Go-сервером'); 
