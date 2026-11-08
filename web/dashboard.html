@@ -251,7 +251,11 @@ async function checkAllowedAuthProtocol() {
                 try {
                     const response = await fetch('/api/payments/webhook', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Webhook-Secret': 'какой-нибудь-длинный-случайный-ключ-например-9f8b2c4e'
+                        },
+
                         body: JSON.stringify({ user_id: 1, status: "succeeded", amount: 2990 })
                     });
                     if (response.ok) {

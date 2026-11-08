@@ -8,6 +8,7 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -394,9 +395,23 @@ type PaymentWebhookDTO struct {
 	Amount int    `json:"amount"`
 }
 
-// HandlePaymentWebhook принимает сигналы от платежной системы и продлевает тариф
+// HandlePaymentWebhook принимает сигналы от платежной системы и продлевает тариф.
+// Защита: платёжная система обязана передавать секретный заголовок X-Webhook-Secret.
 func (h *Handler) HandlePaymentWebhook(c *fiber.Ctx) error {
 	ctx := c.Context()
+
+	// === ЗАЩИТА: ПРОВЕРКА СЕКРЕТА ВЕБХУКА ===
+	secret := os.Getenv("PAYMENT_WEBHOOK_SECRET")
+	if secret == "" {
+		log.Printf("[КРИТИЧЕСКАЯ ОШИБКА CONFIG] Переменная PAYMENT_WEBHOOK_SECRET не задана — вебхук отклонен")
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Вебхук не настроен на сервере"})
+	}
+
+	if c.Get("X-Webhook-Secret") != secret {
+		log.Printf("[ОТКАЗ ВЕБХУКА] Попытка вызова без верного секрета с IP: %s", c.IP())
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Неверный секрет вебхука"})
+	}
+
 	var dto PaymentWebhookDTO
 	if err := c.BodyParser(&dto); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректная платежная дата"})
@@ -418,10 +433,30 @@ func (h *Handler) HandlePaymentWebhook(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusOK)
 }
 
-// GetCampaignLogs возвращает историю изменения ставок для конкретной кампании
+// GetCampaignLogs возвращает историю изменения ставок для конкретной кампании (только её владельцу)
 func (h *Handler) GetCampaignLogs(c *fiber.Ctx) error {
 	ctx := c.Context()
-	campaignID := c.Params("id")
+
+	userID, ok := c.Locals("user_id").(int64)
+	if !ok {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Сбой контекста авторизации"})
+	}
+
+	// Парсим ID кампании из URL и проверяем, что это число
+	campaignID, err := strconv.ParseInt(c.Params("id"), 10, 64)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный ID кампании"})
+	}
+
+	// ЗАЩИТА: проверяем, что кампания существует и принадлежит именно этому пользователю
+	var ownerID int64
+	err = h.pool.QueryRow(ctx, "SELECT user_id FROM campaigns WHERE id = $1", campaignID).Scan(&ownerID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Кампания не найдена"})
+	}
+	if ownerID != userID {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Доступ к этой кампании запрещен"})
+	}
 
 	query := `
 		SELECT old_bid, new_bid, market_bids, status_message, created_at 
@@ -439,7 +474,7 @@ func (h *Handler) GetCampaignLogs(c *fiber.Ctx) error {
 	type LogItem struct {
 		OldBid    int       `json:"old_bid"`
 		NewBid    int       `json:"new_bid"`
-		Market    []int32   `json:"market_bids"` // Исправлено: []int32 для корректного маппинга integer[] в pgx
+		Market    []int32   `json:"market_bids"` // []int32 для корректного маппинга integer[] в pgx
 		Message   string    `json:"status_message"`
 		CreatedAt time.Time `json:"created_at"`
 	}
@@ -449,7 +484,7 @@ func (h *Handler) GetCampaignLogs(c *fiber.Ctx) error {
 		var l LogItem
 		err := rows.Scan(&l.OldBid, &l.NewBid, &l.Market, &l.Message, &l.CreatedAt)
 		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка parsing логов"})
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка чтения логов"})
 		}
 		logs = append(logs, l)
 	}
@@ -478,7 +513,7 @@ func (h *Handler) GetUserProfile(c *fiber.Ctx) error {
 	}
 
 	var email string
-	var expiresAt *time.Time // Исправлено: Указатель для корректной обработки NULL значений в базе данных
+	var expiresAt *time.Time // Указатель для корректной обработки NULL значений в базе данных
 	var campaignLimit int
 	var allowedProtocol string
 
@@ -496,20 +531,20 @@ func (h *Handler) GetUserProfile(c *fiber.Ctx) error {
 	var isSubscriptionActive bool
 
 	if expiresAt != nil {
-		expiresStr = expiresAt.Format("2006-01-02 15:04:05")
+		expiresStr = expiresAt.Format(time.RFC3339) // ISO 8601 — браузер парсит такой формат без проблем
 		isSubscriptionActive = expiresAt.After(time.Now())
 	} else {
-		expiresStr = "Нет активной подписки"
+		expiresStr = "" // пустая строка: фронтенд подставит прочерк вместо "Invalid Date"
 		isSubscriptionActive = false
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"user_id":              userID,
-		"email":                email,
-		"subscription_expires": expiresStr,
-		"is_active":            isSubscriptionActive,
-		"campaign_limit":       campaignLimit,
-		"auth_protocol":        allowedProtocol,
+		"user_id":               userID,
+		"email":                 email,
+		"expires_at":            expiresStr, // ← имя и формат под фронтенд (loadSubscriptionStatus)
+		"is_active":             isSubscriptionActive,
+		"campaign_limit":        campaignLimit,
+		"allowed_auth_protocol": allowedProtocol, // ← имя под фронтенд (checkAllowedAuthProtocol)
 	})
 }
 
