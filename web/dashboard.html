@@ -161,7 +161,7 @@
         const containerOAuthInput = document.getElementById('containerOAuthInput');
         const wbTokenInput = document.getElementById('wbToken');
 
-        let activeMethod = 'token';
+        let currentCampaignId = null; // ID последней кампании пользователя для опроса логов
 
         // Переключение вкладок интеграции (Токен / OAuth)
         if (tabToken && tabOAuth) {
@@ -305,6 +305,7 @@ async function checkAllowedAuthProtocol() {
                         if (activeMethod === 'oauth') {
                             document.getElementById('oauthConnectedSignal').value = "";
                         }
+                        currentCampaignId = bodyData.id; // запоминаем ID для автоопроса
                         loadCampaignLogs(bodyData.id);
                     } else {
                         const data = await response.json();
@@ -385,11 +386,15 @@ async function checkAllowedAuthProtocol() {
 
         // Фоновый автоматический опрос логов и статуса профиля
         if (localStorage.getItem('jwt_token')) {
-            loadCampaignLogs(554433);
             loadSubscriptionStatus();
 
             setInterval(loadSubscriptionStatus, 30000);
-            setInterval(() => loadCampaignLogs(554433), 10000);
+            setInterval(() => {
+                // Опрашиваем логи только реальной кампании — 404 больше не будет
+                if (currentCampaignId) {
+                    loadCampaignLogs(currentCampaignId);
+                }
+            }, 10000);
         }
     </script>
 </body>
