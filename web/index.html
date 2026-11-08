@@ -6,10 +6,8 @@
     <title>WB-Bidder — Профессиональный АРК-биддер для Wildberries</title>
     <link rel="stylesheet" href="/css/tailwind.min.css">
 
-    <!-- Официальное стабильное подключение Яндекс Капчи:
-         onload-колбэк + автопоиск контейнеров smart-captcha (render=onload) -->
-    <script src="https://smartcaptcha.cloud.yandex.ru/captcha.js?onload=onloadSmartCaptcha" defer></script>
-
+    <!-- Официальное стабильное подключение Яндекс Капчи:-->
+    <script src="https://smartcaptcha.cloud.yandex.ru/captcha.js?render=onload&onload=onloadSmartCaptcha" defer></script>
     <style>
       body { 
         font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
@@ -105,7 +103,7 @@
 
             <!-- Контейнер капчи: видна сразу при загрузке страницы, sitekey подставляет сервер -->
             <div id="captchaContainer" class="mb-4 flex justify-center">
-              <div id="yandex-captcha-box" class="smart-captcha"></div>
+              <div id="yandex-captcha-box"></div>
             </div>
 
             <button type="submit" id="submitBtn" 
@@ -187,20 +185,33 @@
                         // Рендер только здесь
                         captchaWidgetId = window.smartCaptcha.render(captchaBox, {
                             sitekey: data.captcha_sitekey,
+                            hl: 'ru',
                             invisible: false,
                             shieldPosition: 'bottom-right',
                             callback: function(token) {
                                 console.log("Капча пройдена, токен получен");
                                 isCaptchaReady = true;
-                            },
-                            'error-callback': function(err) {
-                                console.error("Ошибка виджета капчи:", err);
-                                if(submitBtn) submitBtn.disabled = true;
+                                if(submitBtn) submitBtn.disabled = false;
                             }
                         });
-                        
-                        isCaptchaReady = true;
-                        if(submitBtn) submitBtn.disabled = false;
+
+                        // Обработка ошибок — через subscribe, а не error-callback
+                        window.smartCaptcha.subscribe(captchaWidgetId, 'javascript-error', (err) => {
+                            console.error("Критическая ошибка JS капчи:", err);
+                            isCaptchaReady = false;
+                            if(submitBtn) submitBtn.disabled = true;
+                        });
+                        window.smartCaptcha.subscribe(captchaWidgetId, 'network-error', () => {
+                            console.warn("Сетевая ошибка капчи");
+                            isCaptchaReady = false;
+                            if(submitBtn) submitBtn.disabled = true;
+                        });
+                        window.smartCaptcha.subscribe(captchaWidgetId, 'token-expired', () => {
+                            console.log("Токен капчи истёк, сброс виджета");
+                            isCaptchaReady = false;
+                            window.smartCaptcha.reset(captchaWidgetId);
+                        });
+
                         console.log("Капча успешно отрисована. ID виджета:", captchaWidgetId);
                     } else {
                         throw new Error('Missing captcha_sitekey or window.smartCaptcha');
@@ -228,7 +239,7 @@
             .then(data => {
                 document.getElementById('footerRequisites').innerHTML = `
                     <p class="font-bold text-slate-200 text-base">${data.status} ${data.fio}</p>
-                    <p>ИНН: \${data.inn}</p>
+                    <p>ИНН: ${data.inn}</p>
                     <p>Email: ${data.email} | Тел: ${data.phone}</p>
                 `;
             }).catch(() => {
@@ -237,7 +248,7 @@
 
         toggleAuth.addEventListener('click', () => {
             isLogin = !isLogin;
-            const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+            const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
             authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + loginSvg;
             submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
             toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
@@ -289,7 +300,7 @@
                 } else {
                     alert('Регистрация успешна! Теперь вы можете войти.');
                     isLogin = true;
-                    const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+                    const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
                     authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
                     submitBtn.innerText = 'Войти';
                     toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';

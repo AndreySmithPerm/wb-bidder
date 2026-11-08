@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Вход в WB-Bidder</title>
     <link rel="stylesheet" href="/css/tailwind.min.css">
+
+    <!-- Яндекс Капча: расширенный режим -->
+    <script src="https://smartcaptcha.cloud.yandex.ru/captcha.js?render=onload&onload=onloadSmartCaptcha" defer></script>
+
     <style>
       body { 
         font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
@@ -17,7 +21,7 @@
       <div class="text-center mb-8">
         <h2 id="authTitle" class="text-3xl font-extrabold text-[#1e293b] tracking-tight relative inline-block">
           Вход в платформу АРК
-          <svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none">
+          <svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
             <path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
           </svg>
         </h2>
@@ -34,6 +38,12 @@
           <input type="password" id="password" required 
               class="w-full px-4 py-2.5 bg-purple-50/50 rounded-xl border border-purple-200 focus:outline-none focus:border-purple-500 focus:bg-white transition">
         </div>
+
+        <!-- Контейнер капчи: sitekey подставляет сервер -->
+        <div id="captchaContainer" class="flex justify-center">
+          <div id="yandex-captcha-box"></div>
+        </div>
+
         <button type="submit" id="submitBtn" 
             class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-xl shadow-sm transition duration-200 cursor-pointer">
             Войти
@@ -42,31 +52,95 @@
 
       <div class="text-center mt-6">
         <button id="toggleAuth" class="text-sm font-medium text-purple-600 hover:text-purple-800 underline transition cursor-pointer">
-            Нет аккаунта? Зарегистрироваться
+            Нет аккаунт? Зарегистрироваться
         </button>
       </div>
     </div>
+
     <!-- Логика скриптов авторизации -->
     <script>
         const authForm = document.getElementById('authForm');
         const authTitle = document.getElementById('authTitle');
         const submitBtn = document.getElementById('submitBtn');
         const toggleAuth = document.getElementById('toggleAuth');
+        const captchaBox = document.getElementById('yandex-captcha-box');
         let isLogin = true;
+        let captchaWidgetId = null;
+        let isCaptchaReady = false;
 
-        // Полностью валидные и чистые SVG-строки с корректными адресами XML-схем
-        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
-        const registerSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://w3.org" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+        // Валидный SVG с корректным namespace
+        const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
+        const registerSvg = loginSvg;
+
+        window.onloadSmartCaptcha = function() {
+            console.log("SDK Яндекс Капчи готов. Запрос ключа у бэкенда...");
+            if(submitBtn) submitBtn.disabled = true;
+
+            fetch('/api/status')
+                .then(res => {
+                    if (!res.ok) throw new Error('Network error: ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    if (data.captcha_sitekey && window.smartCaptcha && captchaBox) {
+                        captchaWidgetId = window.smartCaptcha.render(captchaBox, {
+                            sitekey: data.captcha_sitekey,
+                            hl: 'ru',
+                            invisible: false,
+                            shieldPosition: 'bottom-right',
+                            callback: function(token) {
+                                isCaptchaReady = true;
+                                if(submitBtn) submitBtn.disabled = false;
+                            }
+                        });
+
+                        window.smartCaptcha.subscribe(captchaWidgetId, 'javascript-error', (err) => {
+                            console.error("Критическая ошибка JS капчи:", err);
+                            isCaptchaReady = false;
+                            if(submitBtn) submitBtn.disabled = true;
+                        });
+                        window.smartCaptcha.subscribe(captchaWidgetId, 'network-error', () => {
+                            isCaptchaReady = false;
+                            if(submitBtn) submitBtn.disabled = true;
+                        });
+                        window.smartCaptcha.subscribe(captchaWidgetId, 'token-expired', () => {
+                            isCaptchaReady = false;
+                            window.smartCaptcha.reset(captchaWidgetId);
+                        });
+                    } else {
+                        throw new Error('Missing captcha_sitekey or window.smartCaptcha');
+                    }
+                })
+                .catch(err => {
+                    console.error("Критическая ошибка инициализации капчи:", err);
+                    if(captchaBox) {
+                        captchaBox.innerHTML = '<div style="color:red; font-size:12px; text-align:center; padding:10px;">Ошибка загрузки защиты. Попробуйте обновить страницу.</div>';
+                    }
+                    if(submitBtn) submitBtn.disabled = true;
+                });
+        };
 
         toggleAuth.addEventListener('click', () => {
             isLogin = !isLogin;
             authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
             submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
-            toggleAuth.innerText = isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
+            toggleAuth.innerText = isLogin ? 'Нет аккаунт? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
+            // При переключении формы капчу сбрасываем — токен привязан к сессии, лучше пройти заново
+            if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
         });
 
         authForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+
+            let captchaToken = "";
+            if (window.smartCaptcha && captchaWidgetId !== null) {
+                captchaToken = window.smartCaptcha.getResponse(captchaWidgetId);
+            }
+            if (!captchaToken) {
+                alert('Пожалуйста, подтвердите, что вы не робот (пройдите капчу).');
+                return;
+            }
+
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
@@ -75,27 +149,28 @@
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
+                    body: JSON.stringify({ email, password, captcha_token: captchaToken })
                 });
                 
-                const data = await response.json();
+                let data = {};
+                try { data = await response.json(); } catch(pErr) { data = { error: 'Ошибка структуры данных' }; }
                 
                 if (!response.ok) { 
                     alert(data.error || 'Ошибка авторизации'); 
+                    if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
                     return; 
                 }
 
                 if (isLogin) {
                     localStorage.setItem('jwt_token', data.token);
-                    // Перенаправляем строго внутрь закрытого кабинета
                     window.location.href = '/dashboard.html';
                 } else {
                     alert('Регистрация успешна! Теперь вы можете войти.');
                     isLogin = true;
-                    // Возвращаем интерфейс формы в режим входа
                     authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
                     submitBtn.innerText = 'Войти';
-                    toggleAuth.innerText = 'Нет аккаунта? Зарегистрироваться';
+                    toggleAuth.innerText = 'Нет аккаунт? Зарегистрироваться';
+                    if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
                 }
             } catch (err) { 
                 alert('Ошибка сети: не удалось связаться с Go-сервером'); 
