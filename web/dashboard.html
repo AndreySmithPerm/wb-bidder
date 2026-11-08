@@ -210,34 +210,39 @@
         }
         fetchCabinetPrice();
 
-        // Проверка разрешенных протоколов администратором
-        async function checkAllowedAuthProtocol() {
-            const token = localStorage.getItem('jwt_token');
-            try {
-                const response = await fetch('/api/user/profile', {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                if (response.ok) {
-                    const user = await response.json();
-                    if (user.allowed_auth_protocol === 'manual') {
-                        if (tabOAuth) tabOAuth.style.display = 'none';
-                        if (tabToken) {
-                            tabToken.click();
-                            tabToken.className = "w-full py-2 text-xs font-bold rounded-lg text-purple-600 bg-white shadow-sm";
-                        }
-                    } else if (user.allowed_auth_protocol === 'oauth') {
-                        if (tabToken) tabToken.style.display = 'none';
-                        if (tabOAuth) {
-                            tabOAuth.click();
-                            tabOAuth.className = "w-full py-2 text-xs font-bold rounded-lg text-purple-600 bg-white shadow-sm";
-                        }
-                    }
-                }
-            } catch (err) {
-                console.error("Ошибка верификации протоколов доступа:", err);
+// Проверка разрешенных протоколов администратором (по умолчанию в БД — 'manual')
+async function checkAllowedAuthProtocol() {
+    const token = localStorage.getItem('jwt_token');
+    if (!token) return;
+
+    // OAuth скрыт сразу: показываем только если разрешено в БД
+    if (tabOAuth) tabOAuth.classList.add('hidden');
+
+    try {
+        const response = await fetch('/api/user/profile', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) return; // ошибка/нет токена — OAuth остаётся скрытым
+
+        const user = await response.json();
+        const proto = user.allowed_auth_protocol || 'manual';
+
+        if (proto === 'oauth') {
+            if (tabToken) tabToken.classList.add('hidden');
+            if (tabOAuth) {
+                tabOAuth.classList.remove('hidden');
+                tabOAuth.click(); // сразу активируем OAuth-вкладку
             }
+        } else if (proto === 'both') {
+            if (tabOAuth) tabOAuth.classList.remove('hidden');
+        } else {
+            // 'manual' — только токен, OAuth недоступен
+            if (tabToken) tabToken.click();
         }
-        checkAllowedAuthProtocol();
+    } catch (err) {
+        console.error("Ошибка верификации протоколов доступа:", err);
+    }
+}
 
         // Вебхук оплаты подписки
         if (buySubBtn) {
