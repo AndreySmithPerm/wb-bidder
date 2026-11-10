@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"sort"
@@ -20,6 +22,25 @@ type WbAuctionResponse struct {
 
 // GetAuctionBids отправляет запрос к аукциону с автоматическим резервным переключением
 func (c *Client) GetAuctionBids(ctx context.Context, keyword string) ([]int, error) {
+	// МОК-РЕЖИМ: имитация живого аукциона без обращения к WB
+	if c.mock {
+		mockBids := make([]int, 10)
+		base := 900
+		for i := range mockBids {
+			mockBids[i] = base - i*80
+			if mockBids[i] < 150 {
+				mockBids[i] = 150
+			}
+		}
+		// Сдвигаем верх аукциона случайно на ±100, чтобы ставки "дышали" между итерациями
+		mockBids[0] += rand.Intn(200) - 100
+		if mockBids[0] < 150 {
+			mockBids[0] = 150
+		}
+		log.Printf("[MOCK] GetAuctionBids: фраза '%s', сгенерирован аукцион %v", keyword, mockBids)
+		return mockBids, nil
+	}
+
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("rate limiter backoff timeout: %w", err)
 	}
@@ -31,11 +52,8 @@ func (c *Client) GetAuctionBids(ctx context.Context, keyword string) ([]int, err
 	}
 
 	escapedKeyword := url.QueryEscape(keyword)
-	// =========================================================================
-	// Вариант А: Основной эндпоинт аукциона
-	// =========================================================================
-	// ИСПРАВЛЕНО: Полностью убрали fmt.Sprintf и заменили на конкатенацию через '+'.
-	// Это гарантирует 100% тишину от любых проверок printf линтера.
+
+	// Вариант А: основной эндпоинт аукциона
 	cleanApiURL := "https://wildberries.ru" + escapedKeyword
 
 	req, err := http.NewRequestWithContext(ctx, "GET", cleanApiURL, nil)
@@ -65,10 +83,7 @@ func (c *Client) GetAuctionBids(ctx context.Context, keyword string) ([]int, err
 		}
 	}
 
-	// =========================================================================
-	// Вариант Б (Fallback): Резервный эндпоинт с исправленным resultset
-	// =========================================================================
-	// ИСПРАВЛЕНО: Здесь тоже убран fmt.Sprintf и заменен на прямое сложение строк.
+	// Вариант Б (fallback): резервный эндпоинт
 	cleanFallbackURL := "https://wb.ru" + escapedKeyword + "&resultset=catalog"
 
 	reqFB, err := http.NewRequestWithContext(ctx, "GET", cleanFallbackURL, nil)

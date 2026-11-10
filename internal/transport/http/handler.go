@@ -18,8 +18,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Секретный ключ для подписи JWT
-var jwtSecret = []byte("super-secret-commercial-key-2026")
+// Секретный ключ для подписи JWT — читается из окружения один раз при старте пакета
+var jwtSecret = func() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		log.Println("[ПРЕДУПРЕЖДЕНИЕ БЕЗОПАСНОСТИ] JWT_SECRET не задан — используется dev-ключ. Для боевого режима задайте JWT_SECRET!")
+		return []byte("dev-only-secret-do-not-use-in-production")
+	}
+	return []byte(secret)
+}()
 
 type Handler struct {
 	pool *pgxpool.Pool
@@ -331,9 +338,25 @@ func (h *Handler) AddCampaign(c *fiber.Ctx) error {
 			WHERE id = $6 AND user_id = $7`
 		_, err = h.pool.Exec(ctx, query, dto.WbToken, dto.Keyword, dto.TargetPlace, dto.MaxBid, dto.MinBid, dto.ID, userID)
 	} else {
+		// === ЭТАП 2: ПРОВЕРКА ЛИМИТА КАМПАНИЙ ПО ТАРИФУ ===
+		var campaignLimit, userCampaigns int
+		if err := h.pool.QueryRow(ctx, "SELECT campaign_limit FROM users WHERE id = $1", userID).Scan(&campaignLimit); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Не удалось проверить лимит кампаний"})
+		}
+		if err := h.pool.QueryRow(ctx, "SELECT COUNT(*) FROM campaigns WHERE user_id = $1", userID).Scan(&userCampaigns); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Не удалось проверить лимит кампаний"})
+		}
+		if userCampaigns >= campaignLimit {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error": "Достигнут лимит кампаний по вашему тарифу. Продлите подписку, чтобы увеличить лимит.",
+			})
+		}
+		// ---------------------------------------------------
+
 		query := `
 			INSERT INTO campaigns (id, user_id, wb_token, keyword, target_place, max_bid, min_bid, current_bid, is_active, strategy_type)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $7, TRUE, 'target_place')`
+
 		_, err = h.pool.Exec(ctx, query, dto.ID, userID, dto.WbToken, dto.Keyword, dto.TargetPlace, dto.MaxBid, dto.MinBid)
 	}
 

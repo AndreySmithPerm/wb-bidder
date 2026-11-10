@@ -66,10 +66,21 @@ func main() {
 		log.Fatalf("База данных не отвечает на пинг: %v", err)
 	}
 	log.Println("Успешное подключение к PostgreSQL.")
+
 	// 3. Инициализируем репозитории и сервисы
 	campRepo := repository.NewCampaignRepository(dbPool)
 	logRepo := repository.NewLogRepository(dbPool)
-	wbCli := wbclient.NewClient()
+
+	// --- ЭТАП 1: МОК-РЕЖИМ WB API ---
+	// WB_API_MOCK=true — фейковый аукцион и ставки без внешних запросов.
+	// WB_API_MOCK=false (или не задана) — боевой режим.
+	mockMode := os.Getenv("WB_API_MOCK") == "true"
+	if mockMode {
+		log.Println("=== РЕЖИМ МОКА WB API АКТИВЕН: внешние запросы отключены ===")
+	}
+	wbCli := wbclient.NewClient(mockMode)
+	// ---------------------------------
+
 	engine := service.NewBidderEngine(wbCli)
 
 	// Настройки многопоточности
@@ -175,6 +186,7 @@ func main() {
 			log.Printf("Уведомление веб-сервера (остановка): %v", err)
 		}
 	}()
+
 	// Первичный запуск опроса при старте приложения
 	if activeCampaigns, err := campRepo.GetActiveCampaigns(ctx); err == nil {
 		for _, c := range activeCampaigns {

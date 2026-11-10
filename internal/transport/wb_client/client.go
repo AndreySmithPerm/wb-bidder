@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 type Client struct {
 	httpClient *http.Client
 	limiter    *rate.Limiter
+	mock       bool
 }
 
-func NewClient() *Client {
+func NewClient(mock bool) *Client {
 	limit := rate.Every(200 * time.Millisecond)
 	wbLimiter := rate.NewLimiter(limit, 3)
 
@@ -26,11 +28,18 @@ func NewClient() *Client {
 			Timeout: 10 * time.Second,
 		},
 		limiter: wbLimiter,
+		mock:    mock,
 	}
 }
 
-// UpdateAutoCPM изменяет ставку CPM для Автоматической кампании (АРК) с учетом лимитов
+// UpdateAutoCPM изменяет ставку CPM для автоматической кампании (АРК) с учетом лимитов
 func (c *Client) UpdateAutoCPM(ctx context.Context, token string, campaignID int64, newBid int) error {
+	// МОК-РЕЖИМ: реальный запрос к WB не отправляется
+	if c.mock {
+		log.Printf("[MOCK] UpdateAutoCPM: кампания %d, новая ставка %d руб. — реальный запрос к WB не отправлен", campaignID, newBid)
+		return nil
+	}
+
 	if err := c.limiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limiter timeout: %w", err)
 	}
