@@ -162,6 +162,7 @@
         const wbTokenInput = document.getElementById('wbToken');
 
         let currentCampaignId = null; // ID последней кампании пользователя для опроса логов
+        let activeMethod = 'token'; // способ подключения: 'token' или 'oauth'
 
         // Переключение вкладок интеграции (Токен / OAuth)
         if (tabToken && tabOAuth) {
@@ -386,6 +387,12 @@ async function checkAllowedAuthProtocol() {
 
         // Фоновый автоматический опрос логов и статуса профиля
         if (localStorage.getItem('jwt_token')) {
+            // Стартовое состояние таблицы: без кампаний честно показываем пустоту
+            const tbody = document.getElementById('campaignsTable');
+            if (tbody) {
+                tbody.innerHTML = '<tr><td colspan="5" class="p-3 text-center text-slate-400">Пока нет истории проверок</td></tr>';
+            }
+
             loadSubscriptionStatus();
 
             setInterval(loadSubscriptionStatus, 30000);
@@ -396,6 +403,7 @@ async function checkAllowedAuthProtocol() {
                 }
             }, 10000);
         }
+
     </script>
 </body>
 </html>
