@@ -67,6 +67,7 @@
         let isLogin = true;
         let captchaWidgetId = null;
         let isCaptchaReady = false;
+        let isReset = false; // третий режим: восстановление пароля
 
         // Валидный SVG с корректным namespace
         const loginSvg = '<svg class="absolute left-0 bottom-[-8px] w-full h-1.5 text-purple-500 opacity-60" viewBox="0 0 300 12" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><path d="M3 9C50 3.5 120 2 297 7" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>';
@@ -121,16 +122,67 @@
         };
 
         toggleAuth.addEventListener('click', () => {
-            isLogin = !isLogin;
-            authTitle.innerHTML = isLogin ? 'Вход в платформу АРК ' + loginSvg : 'Регистрация селлера ' + registerSvg;
-            submitBtn.innerText = isLogin ? 'Войти' : 'Создать аккаунт';
-            toggleAuth.innerText = isLogin ? 'Нет аккаунт? Зарегистрироваться' : 'Уже есть аккаунт? Войти';
-            // При переключении формы капчу сбрасываем — токен привязан к сессии, лучше пройти заново
+            // Три режима: login -> register -> reset -> снова login
+            if (isLogin && !isReset) {
+                isLogin = false; // уходим в регистрацию
+                authTitle.innerHTML = 'Регистрация селлера ' + registerSvg;
+                submitBtn.innerText = 'Создать аккаунт';
+                toggleAuth.innerText = 'Уже есть аккаунт? Войти';
+            } else if (!isLogin && !isReset) {
+                isReset = true; // уходим в восстановление пароля
+                authTitle.innerHTML = 'Восстановление пароля ' + loginSvg;
+                submitBtn.innerText = 'Отправить ссылку';
+                toggleAuth.innerText = 'Я вспомнил пароль. Войти';
+            } else {
+                isLogin = true; // входим
+                isReset = false;
+                authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
+                submitBtn.innerText = 'Войти';
+                toggleAuth.innerText = 'Нет аккаунт? Зарегистрироваться';
+            }
             if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
         });
 
         authForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            // Режим восстановления: отправляем только email, капча всё равно нужна
+            if (isReset) {
+                let resetCaptchaToken = "";
+                if (window.smartCaptcha && captchaWidgetId !== null) {
+                    resetCaptchaToken = window.smartCaptcha.getResponse(captchaWidgetId);
+                }
+                if (!resetCaptchaToken) {
+                    alert('Пожалуйста, подтвердите, что вы не робот.');
+                    return;
+                }
+                try {
+                    const response = await fetch('/api/auth/forgot', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            email: document.getElementById('email').value,
+                            captcha_token: resetCaptchaToken
+                        })
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        alert(data.error || 'Ошибка запроса восстановления');
+                        if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
+                        return;
+                    }
+                    alert('Если такой email зарегистрирован, ссылка для сброса отправлена. Проверьте почту (пока — логи сервера).');
+                    // возвращаемся в режим входа
+                    isLogin = true;
+                    isReset = false;
+                    authTitle.innerHTML = 'Вход в платформу АРК ' + loginSvg;
+                    submitBtn.innerText = 'Войти';
+                    toggleAuth.innerText = 'Нет аккаунт? Зарегистрироваться';
+                    if (window.smartCaptcha && captchaWidgetId !== null) window.smartCaptcha.reset(captchaWidgetId);
+                } catch (err) {
+                    alert('Ошибка сети: не удалось связаться с Go-сервером');
+                }
+                return; // дальше основной сценарий логина/регистрации не идёт
+            }
 
             let captchaToken = "";
             if (window.smartCaptcha && captchaWidgetId !== null) {

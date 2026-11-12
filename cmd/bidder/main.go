@@ -165,7 +165,18 @@ func main() {
 		DisableStartupMessage: false,
 	})
 
-	apiHandler := apiHttp.NewHandler(dbPool)
+	// Инициализируем mailer
+	mailer := service.NewMailer(
+		cfg.SmtpHost,
+		cfg.SmtpPort,
+		cfg.SmtpUser,
+		cfg.SmtpPass,
+		cfg.SmtpFromEmail,
+		cfg.SmtpFromName,
+		cfg.WebURL,
+	)
+
+	apiHandler := apiHttp.NewHandler(dbPool, mailer)
 	app.Static("/", "./web")
 
 	// Маршруты API (Все методы теперь строго соответствуют заглавным буквам в handler.go)
@@ -173,7 +184,11 @@ func main() {
 	app.Get("/api/public/price", apiHandler.GetPublicPrice)
 	app.Get("/api/status", apiHandler.GetStatus)
 	app.Post("/api/auth/register", apiHandler.Register)
+	app.Get("/api/auth/verify", apiHandler.VerifyEmail)
+	app.Post("/api/auth/resend", apiHandler.ResendVerification)
 	app.Post("/api/auth/login", apiHandler.Login)
+	app.Post("/api/auth/forgot", apiHandler.ForgotPassword)
+	app.Post("/api/auth/reset", apiHandler.ResetPassword)
 	app.Post("/api/payments/webhook", apiHandler.HandlePaymentWebhook)
 	app.Get("/api/admin/stats", apiHandler.AuthMiddleware, apiHandler.AdminMiddleware, apiHandler.GetAdminStats)
 	app.Post("/api/campaigns", apiHandler.AuthMiddleware, apiHandler.AddCampaign)

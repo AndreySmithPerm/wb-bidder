@@ -2,6 +2,9 @@ package http
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -15,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"wb-bidder/internal/service"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -29,11 +33,12 @@ var jwtSecret = func() []byte {
 }()
 
 type Handler struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	mailer *service.Mailer
 }
 
-func NewHandler(pool *pgxpool.Pool) *Handler {
-	return &Handler{pool: pool}
+func NewHandler(pool *pgxpool.Pool, mailer *service.Mailer) *Handler {
+	return &Handler{pool: pool, mailer: mailer}
 }
 
 // ProxyYandexCaptcha скачивает скрипт напрямую у Яндекса и отдает его от вашего домена
@@ -129,7 +134,7 @@ func (h *Handler) validateCaptcha(ctx context.Context, token, userIP string) (bo
 	return true, nil
 }
 
-// Register создает пользователя с динамическим триал-периодом, лимитами из БД и валидацией Яндекс Капчи
+// Register создает пользователя с динамическим триал-периодом, лимитами из БД, валидацией капчи и email-верификацией
 func (h *Handler) Register(c *fiber.Ctx) error {
 	ctx := c.Context()
 
@@ -161,11 +166,23 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 		})
 	}
 
+	// === ЛИМИТ РЕГИСТРАЦИЙ: не более 3 раз в сутки (по email + IP) ===
+	attemptsCount, err := h.countRegistrationAttempts(ctx, dto.Email, c.IP())
+	if err != nil {
+		log.Printf("[ОШИБКА] Проверка попыток регистрации: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка проверки лимита"})
+	}
+	if attemptsCount >= 3 {
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"error": "Превышен лимит попыток регистрации (3 в сутки). Попробуйте завтра.",
+		})
+	}
+
 	// 1. Извлекаем динамические настройки триала из базы данных
 	var trialDays int
 	var trialLimit int
 
-	err := h.pool.QueryRow(ctx, "SELECT value FROM system_settings WHERE key = 'trial_days'").Scan(&trialDays)
+	err = h.pool.QueryRow(ctx, "SELECT value FROM system_settings WHERE key = 'trial_days'").Scan(&trialDays)
 	if err != nil {
 		trialDays = 3
 	}
@@ -181,21 +198,191 @@ func (h *Handler) Register(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка хеширования пароля"})
 	}
 
-	// 3. Записываем юзера, используя функцию make_interval для безопасного добавления дней
+	// 3. Генерируем токен верификации
+	rawToken := make([]byte, 16)
+	if _, err := rand.Read(rawToken); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка генерации токена"})
+	}
+	verifyToken := hex.EncodeToString(rawToken)
+	tokenHash := sha256.Sum256([]byte(verifyToken))
+	tokenHashHex := hex.EncodeToString(tokenHash[:])
+	tokenExpires := time.Now().Add(24 * time.Hour)
+
+	// 4. Записываем юзера с флагом is_verified = false
 	query := `
-		INSERT INTO users (email, password_hash, subscription_expires_at, campaign_limit, role) 
-		VALUES ($1, $2, NOW() + make_interval(days => $3), $4, 'seller') 
+		INSERT INTO users (email, password_hash, subscription_expires_at, campaign_limit, role, 
+		                   is_verified, verify_token_hash, verify_token_expires) 
+		VALUES ($1, $2, NOW() + make_interval(days => $3), $4, 'seller', FALSE, $5, $6) 
 		RETURNING id`
 
 	var userID int64
-	err = h.pool.QueryRow(ctx, query, dto.Email, string(hashedPassword), trialDays, trialLimit).Scan(&userID)
+	err = h.pool.QueryRow(ctx, query, dto.Email, string(hashedPassword), trialDays, trialLimit, tokenHashHex, tokenExpires).Scan(&userID)
 	if err != nil {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Пользователь с таким Email уже существует"})
+		if strings.Contains(err.Error(), "users_email_key") || strings.Contains(err.Error(), "duplicate key") {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "Пользователь с таким Email уже существует"})
+		}
+		log.Printf("[ОШИБКА] Создание пользователя: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка создания аккаунта"})
 	}
 
+	// 5. Записываем попытку регистрации
+	_, insertErr := h.pool.Exec(ctx,
+		`INSERT INTO registration_attempts (email, ip_address) VALUES ($1, $2)`,
+		dto.Email, c.IP())
+	if insertErr != nil {
+		log.Printf("[ОШИБКА] Запись попытки регистрации: %v", insertErr)
+	}
+
+	// 6. Очищаем старые попытки (старше 24 часов)
+	_, _ = h.pool.Exec(ctx,
+		`DELETE FROM registration_attempts WHERE created_at < NOW() - INTERVAL '24 hours'`)
+
+	// 7. Отправляем письмо подтверждения
+	go func() {
+		if err := h.mailer.SendVerification(dto.Email, verifyToken); err != nil {
+			log.Printf("[ОШИБКА] Отправка письма подтверждения: %v", err)
+		}
+	}()
+
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-		"message": "Регистрация успешна",
-		"user_id": userID,
+		"message":   "Регистрация успешна. Проверьте почту для подтверждения.",
+		"user_id":   userID,
+		"verified":  false,
+	})
+}
+
+// countRegistrationAttempts считает количество попыток регистрации за последние 24 часа
+func (h *Handler) countRegistrationAttempts(ctx context.Context, email string, ip string) (int, error) {
+	query := `
+		SELECT COUNT(*) FROM registration_attempts 
+		WHERE (email = $1 OR ip_address = $2) 
+		AND created_at > NOW() - INTERVAL '24 hours'`
+
+	var count int
+	err := h.pool.QueryRow(ctx, query, email, ip).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// VerifyEmail подтверждает email по токену из ссылки
+func (h *Handler) VerifyEmail(c *fiber.Ctx) error {
+	ctx := c.Context()
+	token := c.Query("token", "")
+	if token == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Токен не указан"})
+	}
+
+	tokenHash := sha256.Sum256([]byte(token))
+	tokenHashHex := hex.EncodeToString(tokenHash[:])
+
+	// Обновляем статус verified
+	result, err := h.pool.Exec(ctx,
+		`UPDATE users 
+		 SET is_verified = TRUE, verify_token_hash = NULL, verify_token_expires = NULL 
+		 WHERE verify_token_hash = $1 AND verify_token_expires > NOW()`,
+		tokenHashHex)
+	if err != nil {
+		log.Printf("[ОШИБКА] Подтверждение email: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка сервера"})
+	}
+
+	if result.RowsAffected() == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Токен недействителен или устарел"})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Email успешно подтверждён"})
+}
+
+// ResendVerification повторяет отправку письма подтверждения
+func (h *Handler) ResendVerification(c *fiber.Ctx) error {
+	ctx := c.Context()
+	var dto struct {
+		Email string `json:"email"`
+	}
+	if err := c.BodyParser(&dto); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный JSON"})
+	}
+
+	dto.Email = strings.TrimSpace(strings.ToLower(dto.Email))
+	if _, err := mail.ParseAddress(dto.Email); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный формат Email"})
+	}
+
+	// Проверяем существует ли пользователь
+	var userID int64
+	var isVerified bool
+	var verifyTokenHash *string
+	var verifyTokenExpires *time.Time
+
+	err := h.pool.QueryRow(ctx,
+		`SELECT id, is_verified, verify_token_hash, verify_token_expires FROM users WHERE email = $1`,
+		dto.Email).Scan(&userID, &isVerified, &verifyTokenHash, &verifyTokenExpires)
+	if err != nil {
+		// Не раскрываем факт существования email — отвечаем как будто отправили
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"message": "Если email зарегистрирован, письмо отправлено повторно",
+		})
+	}
+
+	// Уже подтверждён
+	if isVerified {
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"message": "Email уже подтверждён",
+		})
+	}
+
+	// Проверяем лимит повторных отправок (не чаще 1 раза в 5 минут)
+	if verifyTokenHash != nil && verifyTokenExpires != nil {
+		var attemptsInWindow int
+		err := h.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM registration_attempts 
+			 WHERE email = $1 AND created_at > NOW() - INTERVAL '5 minutes'`,
+			dto.Email).Scan(&attemptsInWindow)
+		if err != nil {
+			log.Printf("[ОШИБКА] Проверка повторной отправки: %v", err)
+		}
+		if attemptsInWindow >= 3 {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error": "Слишком частые запросы. Подождите 5 минут",
+			})
+		}
+	}
+
+	// Генерируем новый токен
+	rawToken := make([]byte, 16)
+	if _, err := rand.Read(rawToken); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка генерации токена"})
+	}
+	verifyToken := hex.EncodeToString(rawToken)
+	tokenHash := sha256.Sum256([]byte(verifyToken))
+	tokenHashHex := hex.EncodeToString(tokenHash[:])
+	tokenExpires := time.Now().Add(24 * time.Hour)
+
+	// Обновляем токен в БД
+	_, err = h.pool.Exec(ctx,
+		`UPDATE users SET verify_token_hash = $1, verify_token_expires = $2 WHERE id = $3`,
+		tokenHashHex, tokenExpires, userID)
+	if err != nil {
+		log.Printf("[ОШИБКА] Обновление токена верификации: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка сервера"})
+	}
+
+	// Записываем попытку для rate limiting
+	_, _ = h.pool.Exec(ctx,
+		`INSERT INTO registration_attempts (email, ip_address) VALUES ($1, $2)`,
+		dto.Email, c.IP())
+
+	// Отправляем письмо
+	go func() {
+		if err := h.mailer.SendVerification(dto.Email, verifyToken); err != nil {
+			log.Printf("[ОШИБКА] Повторная отправка письма подтверждения: %v", err)
+		}
+	}()
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"message": "Письмо отправлено повторно. Проверьте почту.",
 	})
 }
 
@@ -221,18 +408,28 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 		})
 	}
 
-	query := `SELECT id, password_hash FROM users WHERE email = $1`
+	query := `SELECT id, password_hash, is_verified FROM users WHERE email = $1`
 	var userID int64
-	var passwordHash string
-
 	dto.Email = strings.TrimSpace(strings.ToLower(dto.Email))
-	err := h.pool.QueryRow(ctx, query, dto.Email).Scan(&userID, &passwordHash)
+
+	var passwordHash string
+	var isVerified bool
+
+	err := h.pool.QueryRow(ctx, query, dto.Email).Scan(&userID, &passwordHash, &isVerified)
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Неверный логин или пароль"})
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(dto.Password)); err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Неверный логин или пароль"})
+	}
+
+	// Проверяем подтверждение email
+	if !isVerified {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error":       "Подтвердите email перед входом",
+			"needs_verify": true,
+		})
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -246,6 +443,107 @@ func (h *Handler) Login(c *fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"token": tokenString})
+}
+
+// ForgotPassword валидирует капчу и создаёт одноразовый токен сброса пароля (TTL 60 минут)
+func (h *Handler) ForgotPassword(c *fiber.Ctx) error {
+	ctx := c.Context()
+	var dto AuthDTO
+	if err := c.BodyParser(&dto); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный JSON"})
+	}
+
+	// === ЗАЩИТА ВАРИАНТ Б: ПРОВЕРКА КАПЧИ НА ВОССТАНОВЛЕНИИ ===
+	if dto.CaptchaToken == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Необходимо пройти проверку капчи"})
+	}
+
+	ok, errCodes := h.validateCaptcha(ctx, dto.CaptchaToken, c.IP())
+	if !ok {
+		log.Printf("[КАПЧА НЕ ПРОЙДЕНА ВОССТАНОВЛЕНИЕ] Ошибки: %v", errCodes)
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error":       "Капча не пройдена",
+			"error_codes": errCodes,
+		})
+	}
+
+	dto.Email = strings.TrimSpace(strings.ToLower(dto.Email))
+	if dto.Email == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Укажите email"})
+	}
+
+	// Генерируем токен сброса и храним в базе только его SHA-256 хэш
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка генерации токена"})
+	}
+	resetToken := hex.EncodeToString(raw)
+	hash := sha256.Sum256([]byte(resetToken))
+	tokenHash := hex.EncodeToString(hash[:])
+	expires := time.Now().Add(60 * time.Minute)
+
+	// Токен пишем только если такой email реально зарегистрирован
+	res, err := h.pool.Exec(ctx,
+		`UPDATE users SET reset_token_hash = $1, reset_token_expires = $2, reset_token_used = FALSE
+		 WHERE email = $3`,
+		tokenHash, expires, dto.Email)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка базы данных"})
+	}
+
+	// Ответ всегда одинаковый — чтобы по нему нельзя было перебирать чужие email'ы
+	if res.RowsAffected() == 1 {
+		log.Printf("[ВОССТАНОВЛЕНИЕ] Сброс пароля для %s. Ссылка: https://wb-bidder.ru/reset.html?token=%s",
+			dto.Email, resetToken)
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"message": "Если такой email зарегистрирован, ссылка для сброса отправлена",
+	})
+}
+
+// ResetPassword принимает токен сброса и новый пароль, обновляет хэш пароля
+func (h *Handler) ResetPassword(c *fiber.Ctx) error {
+	ctx := c.Context()
+	var dto struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if err := c.BodyParser(&dto); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный JSON"})
+	}
+
+	if len(dto.Password) < 6 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Пароль должен быть не менее 6 символов"})
+	}
+
+	hash := sha256.Sum256([]byte(dto.Token))
+	tokenHash := hex.EncodeToString(hash[:])
+
+	var email string
+	err := h.pool.QueryRow(ctx,
+		`SELECT email FROM users
+		 WHERE reset_token_hash = $1 AND reset_token_used = FALSE AND reset_token_expires > NOW()`,
+		tokenHash).Scan(&email)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Ссылка недействительна или устарела"})
+	}
+
+	pwdHash, err := bcrypt.GenerateFromPassword([]byte(dto.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка хэширования пароля"})
+	}
+
+	_, err = h.pool.Exec(ctx,
+		`UPDATE users SET password_hash = $1, reset_token_hash = NULL, reset_token_expires = NULL, reset_token_used = TRUE
+		 WHERE email = $2`,
+		pwdHash, email)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Ошибка базы данных"})
+	}
+
+	log.Printf("[ВОССТАНОВЛЕНИЕ] Пароль успешно изменён для %s", email)
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Пароль успешно изменён"})
 }
 
 // AuthMiddleware защищает роуты, проверяя заголовок Authorization: Bearer <token>
@@ -569,18 +867,6 @@ func (h *Handler) GetUserProfile(c *fiber.Ctx) error {
 		"campaign_limit":        campaignLimit,
 		"allowed_auth_protocol": allowedProtocol, // ← имя под фронтенд (checkAllowedAuthProtocol)
 	})
-}
-
-// ResetPassword — эндпоинт для инициации сброса пароля
-func (h *Handler) ResetPassword(c *fiber.Ctx) error {
-	type ResetDTO struct {
-		Email string `json:"email"`
-	}
-	var dto ResetDTO
-	if err := c.BodyParser(&dto); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Некорректный JSON"})
-	}
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "Инструкции отправлены на Email"})
 }
 
 // SavePassword — сохранение нового пароля после сброса
